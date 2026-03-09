@@ -34,34 +34,47 @@ def scrape_requirements(program_url: str):
     soup = get_soup(program_url)
     requirements = []
 
-    # Find any heading that looks like a requirement group
-    for heading in soup.find_all(["h2", "h3", "h4"]):
-        group_name = heading.get_text(strip=True)
-        if not re.search(r"Year|Fall|Spring|Take |Elective|Core|Major Requirements|Program Requirements", group_name, re.I):
-            continue
-
-        # Look for the next table after this heading
-        table = heading.find_next("table")
-        if not table:
-            continue
-
-        rows = table.find_all("tr")
-        for tr in rows[1:]:  # skip header row
-            tds = tr.find_all("td")
-            if len(tds) < 3:
+    # HELPER: Actual scraping logic
+    def extract_from_soup(s, url):
+        found_any = False
+        # Find any heading that looks like a requirement group
+        for heading in s.find_all(["h2", "h3", "h4"]):
+            group_name = heading.get_text(strip=True)
+            if not re.search(r"Year|Fall|Spring|Take |Elective|Core|Major Requirements|Program Requirements|Foundation|Curriculum", group_name, re.I):
                 continue
-            code_td = tds[0]
-            title_td = tds[1]
-            credits_td = tds[-1]
 
-            code = code_td.get_text(strip=True)
-            title = title_td.get_text(strip=True)
-            credits = credits_td.get_text(strip=True)
+            # Look for the next table after this heading
+            table = heading.find_next("table")
+            if not table:
+                continue
+            
+            # Ensure this table belongs to THIS heading (not a later one)
+            prev_h = table.find_previous(["h2", "h3", "h4"])
+            if prev_h != heading:
+                continue
 
-            link = code_td.find("a") or title_td.find("a")
-            course_url = urljoin(BASE_URL, link["href"]) if link and link.get("href") else None
+            rows = table.find_all("tr")
+            for tr in rows: 
+                tds = tr.find_all("td")
+                if len(tds) < 3:
+                    continue
+                
+                # Dynamic column picking: Credits is usually last
+                code_td = tds[0]
+                title_td = tds[1]
+                credits_td = tds[-1]
 
-            if code and title and not title.lower().startswith("title"):
+                code = code_td.get_text(strip=True)
+                title = title_td.get_text(strip=True)
+                credits = credits_td.get_text(strip=True)
+
+                # Skip header rows
+                if not code or title.lower().startswith("title") or code.lower().startswith("course"):
+                    continue
+
+                link = code_td.find("a") or title_td.find("a")
+                course_url = urljoin(BASE_URL, link["href"]) if link and link.get("href") else None
+
                 requirements.append({
                     "group": group_name,
                     "code": code,
@@ -69,6 +82,22 @@ def scrape_requirements(program_url: str):
                     "credits": credits,
                     "course_url": course_url
                 })
+                found_any = True
+        return found_any
+
+    # Try scraping the main page first
+    has_data = extract_from_soup(soup, program_url)
+
+    # If no data found, check for a "Requirements" sub-link
+    if not has_data:
+        req_link = soup.find("a", string=re.compile(r"Requirements", re.I))
+        if req_link and req_link.get("href"):
+            sub_url = urljoin(program_url, req_link["href"])
+            # Only follow if it's actually a sub-page (avoids loops)
+            if sub_url != program_url:
+                sub_soup = get_soup(sub_url)
+                extract_from_soup(sub_soup, sub_url)
+    
     return requirements
 
 def main():
@@ -83,16 +112,22 @@ def main():
     index_url = f"{BASE_URL}/en/{args.year}/undergraduate-announcements/undergraduate-programs/bachelor-degree-programs"
     soup = get_soup(index_url)
 
+    all_links = soup.find_all("a", href=True)
+    seen_urls = set()
     programs = []
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if "bachelor-degree-programs/" in href and len(href.split("/")) > 6:
-            name = a.get_text(strip=True)
-            full_url = urljoin(BASE_URL, href)
-            slug = href.rstrip("/").split("/")[-1]
-            programs.append({"name": name, "url": full_url, "slug": slug})
 
-    print(f"Found {len(programs)} programs. Scraping requirements...\n")
+    for a in all_links:
+        href = a["href"]
+        # Filter for actual program pages and remove duplicates
+        if "bachelor-degree-programs/" in href and len(href.split("/")) > 6:
+            full_url = urljoin(BASE_URL, href)
+            if full_url not in seen_urls:
+                seen_urls.add(full_url)
+                name = a.get_text(strip=True)
+                slug = href.rstrip("/").split("/")[-1]
+                programs.append({"name": name, "url": full_url, "slug": slug})
+
+    print(f"Found {len(programs)} unique programs. Scraping requirements...\n")
     Path("csvs").mkdir(exist_ok=True)
 
     for prog in programs:
