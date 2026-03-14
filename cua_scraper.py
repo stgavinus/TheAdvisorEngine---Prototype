@@ -13,7 +13,7 @@ from urllib.parse import urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BASE_URL = "https://catholic.smartcatalogiq.com"
-HEADERS = {"User-Agent": "CUA-Universal-Scraper/5.0 (gavin@yourdomain.com)"}
+HEADERS = {"User-Agent": "CUA-Universal-Scraper/5.1 (gavin@yourdomain.com)"}
 
 # Output Configuration
 DATA_DIR = Path("data")
@@ -43,6 +43,7 @@ def setup_database():
         CREATE TABLE programs (
             id INTEGER PRIMARY KEY, 
             year TEXT, 
+            category TEXT,
             name TEXT, 
             slug TEXT UNIQUE, 
             url TEXT, 
@@ -61,14 +62,14 @@ def setup_database():
     conn.commit()
     return conn
 
-# --- STAGE 1: MAJOR REQUIREMENTS ---
+# --- STAGE 1: MAJOR/MINOR REQUIREMENTS ---
 
 def extract_requirements_from_page(soup):
     if not soup: return []
     page_reqs = []
     for heading in soup.find_all(["h1", "h2", "h3", "h4"]):
         group_name = heading.get_text(strip=True)
-        if not re.search(r"Year|Fall|Spring|Take |Elective|Core|Major|Minor|Foundation|Curriculum|Sequence|Plan|Requirements", group_name, re.I): continue
+        if not re.search(r"Year|Fall|Spring|Take |Elective|Core|Major|Minor|Foundation|Curriculum|Sequence|Plan|Requirements|Concentration", group_name, re.I): continue
         table = heading.find_next("table")
         if not table or table.find_previous(["h1", "h2", "h3", "h4"]) != heading: continue
         for tr in table.find_all("tr"):
@@ -85,7 +86,7 @@ def extract_requirements_from_page(soup):
             page_reqs.append({"group": group_name, "code": code, "title": title, "credits": credits, "course_url": course_url})
     return page_reqs
 
-def scrape_major(program_url, program_name, current_slug, all_slugs):
+def scrape_program(program_url, program_name, current_slug, all_slugs):
     all_requirements, visited_urls, to_visit = [], set(), [(program_url, 0)]
     name_keywords = set(re.findall(r"\w{4,}", program_name.lower()))
     page_text_dump = ""
@@ -145,33 +146,40 @@ def main():
     conn = setup_database()
     cur = conn.cursor()
 
-    print(f"🚀 Starting CUA Mega-Scraper v5 for Catalog Year {args.year}")
-    print(f"📂 Output directory: {DATA_DIR}\n")
-
-    # 1. Fetch Index
-    index_soup = get_soup(f"{BASE_URL}/en/{args.year}/undergraduate-announcements/undergraduate-programs/bachelor-degree-programs")
-    if not index_soup:
-        print("❌ Could not reach index page.")
-        return
+    print(f"🚀 Starting CUA Undergraduate Mega-Scraper v5.1 for Catalog Year {args.year}")
+    
+    categories = {
+        "Bachelor Degrees": f"{BASE_URL}/en/{args.year}/undergraduate-announcements/undergraduate-programs/bachelor-degree-programs",
+        "Associate Degrees": f"{BASE_URL}/en/{args.year}/undergraduate-announcements/undergraduate-programs/associate-degree-programs",
+        "Minors": f"{BASE_URL}/en/{args.year}/undergraduate-announcements/undergraduate-programs/undergraduate-minors",
+        "Certificates": f"{BASE_URL}/en/{args.year}/undergraduate-announcements/undergraduate-programs/undergraduate-certificates"
+    }
 
     programs = []
-    all_slugs = []
-    for a in index_soup.find_all("a", href=True):
-        if "bachelor-degree-programs/" in a["href"] and len(a["href"].split("/")) > 6:
-            url = urljoin(BASE_URL, a["href"]).rstrip("/")
-            if url not in [p["url"] for p in programs]:
-                slug = a["href"].rstrip("/").split("/")[-1]
-                programs.append({"name": a.get_text(strip=True), "url": url, "slug": slug})
-                all_slugs.append(slug)
+    for cat_name, cat_url in categories.items():
+        print(f"🔍 Fetching index: {cat_name}...")
+        soup = get_soup(cat_url)
+        if not soup: continue
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "/undergraduate-programs/" in href and len(href.split("/")) > 6:
+                url = urljoin(BASE_URL, href).rstrip("/")
+                if url not in [p["url"] for p in programs]:
+                    programs.append({
+                        "category": cat_name,
+                        "name": a.get_text(strip=True), 
+                        "url": url, 
+                        "slug": href.rstrip("/").split("/")[-1]
+                    })
     
-    print(f"✅ Found {len(programs)} unique programs. Extraction Stage 1 (Majors) starting...\n")
+    all_slugs = [p["slug"] for p in programs]
+    print(f"✅ Found {len(programs)} unique undergraduate programs across all categories.\n")
 
     failed_data = {}
     for i, prog in enumerate(programs, 1):
-        print(f"[{i}/{len(programs)}] → {prog['name']}")
-        reqs, text_dump = scrape_major(prog["url"], prog["name"], prog["slug"], all_slugs)
+        print(f"[{i}/{len(programs)}] ({prog['category']}) → {prog['name']}")
+        reqs, text_dump = scrape_program(prog["url"], prog["name"], prog["slug"], all_slugs)
         
-        # Deduplicate
         unique_reqs = []
         seen = set()
         for r in reqs:
@@ -180,7 +188,8 @@ def main():
                 unique_reqs.append(r)
         
         status = "Active" if unique_reqs else "No Data Found"
-        cur.execute("INSERT OR REPLACE INTO programs (year, name, slug, url, status) VALUES (?, ?, ?, ?, ?)", (args.year, prog['name'], prog['slug'], prog['url'], status))
+        cur.execute("INSERT OR REPLACE INTO programs (year, category, name, slug, url, status) VALUES (?, ?, ?, ?, ?, ?)", 
+                    (args.year, prog['category'], prog['name'], prog['slug'], prog['url'], status))
         pid = cur.execute("SELECT id FROM programs WHERE slug=?", (prog['slug'],)).fetchone()[0]
         
         gids = {}
@@ -198,7 +207,6 @@ def main():
             print(f"   ⚠️ Logged for AI analysis")
         conn.commit()
 
-    # 2. Deep Scrape Courses
     print(f"\n🚀 Stage 2 (Parallel Course Details) starting...")
     cur.execute("SELECT DISTINCT code, course_url FROM group_courses WHERE course_url IS NOT NULL")
     courses_to_scrape = cur.fetchall()
@@ -214,15 +222,15 @@ def main():
                 conn.commit()
     conn.commit()
 
-    # 3. Master Export
-    df_all = pd.read_sql_query("SELECT p.name as program, p.status, g.group_name, c.code, c.title, c.credits, c.course_url FROM programs p JOIN requirement_groups g ON g.program_id = p.id JOIN group_courses c ON c.group_id = g.id WHERE p.year = ?", conn, params=(args.year,))
+    # Master Export (Updated with Category)
+    df_all = pd.read_sql_query("SELECT p.category, p.name as program, p.status, g.group_name, c.code, c.title, c.credits, c.course_url FROM programs p JOIN requirement_groups g ON g.program_id = p.id JOIN group_courses c ON c.group_id = g.id WHERE p.year = ?", conn, params=(args.year,))
     df_all.to_csv(DATA_DIR / f"all_requirements_{args.year}.csv", index=False)
     with open(FAILED_LOG, "w") as f: json.dump(failed_data, f, indent=4)
     conn.close()
 
     print(f"\n🎉 Scraper Phase Complete! Data in '{DATA_DIR}/'")
 
-    # 4. Trigger AI
+    # AI Trigger
     if not args.skip_ai and failed_data:
         print(f"\n🤖 Automatically triggering Stage 3 (AI Diagnosis)...")
         try:
@@ -230,7 +238,7 @@ def main():
         except Exception as e:
             print(f"❌ AI Stage failed to run: {e}")
     
-    print(f"\n🏁 ALL TASKS FINISHED SUCCESSFULLY!")
+    print(f"\n🏁 ALL UNDERGRADUATE DATA CAPTURED SUCCESSFULLY!")
 
 if __name__ == "__main__":
     main()
