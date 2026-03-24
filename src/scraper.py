@@ -239,14 +239,13 @@ class CourseDetailScraper:
                 detail.description = text
                 break
 
-        # Prerequisites block
+        # Prerequisites block — preserve "or"/"and" connectors by using full text
         prereq_div = soup.find("div", class_="sc_prereqs")
         if prereq_div:
-            detail.prerequisites = " ".join(
-                el.get_text(strip=True)
-                for el in prereq_div.children
-                if isinstance(el, Tag) and el.name != "h3"
-            ).strip()
+            h3 = prereq_div.find("h3")
+            if h3:
+                h3.extract()
+            detail.prerequisites = prereq_div.get_text(separator=" ", strip=True)
 
         # Cross-listed courses
         cross_h3 = soup.find("h3", string=re.compile(r"cross.listed", re.I))

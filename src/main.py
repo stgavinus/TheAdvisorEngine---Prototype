@@ -114,24 +114,26 @@ def main():
     parser.add_argument("--workers", type=int, default=10, help="Parallel workers (default: 10)")
     parser.add_argument("--major",   help="Scrape a single program by slug")
     parser.add_argument("--no-details", action="store_true", help="Skip stage 2 course detail scraping")
+    parser.add_argument("--details-only", action="store_true", help="Skip stage 1, run stage 2 only")
     args = parser.parse_args()
 
     db = DatabaseManager(Path("data/cua_catalog.db"))
     db.setup()
 
-    programs = discover_programs(args.year)
-    if not programs:
-        print("No programs found. Check the catalog URL or year.")
-        return
-
-    if args.major:
-        target = next((p for p in programs if p["slug"] == args.major), None)
-        if not target:
-            print(f"Slug '{args.major}' not found.")
+    if not args.details_only:
+        programs = discover_programs(args.year)
+        if not programs:
+            print("No programs found. Check the catalog URL or year.")
             return
-        programs = [target]
 
-    stage1(programs, args.year, args.workers, db)
+        if args.major:
+            target = next((p for p in programs if p["slug"] == args.major), None)
+            if not target:
+                print(f"Slug '{args.major}' not found.")
+                return
+            programs = [target]
+
+        stage1(programs, args.year, args.workers, db)
 
     if not args.no_details:
         stage2(args.workers, db)
