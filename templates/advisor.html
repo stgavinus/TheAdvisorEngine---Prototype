@@ -1,0 +1,370 @@
+{% extends "base.html" %}
+{% block title %}{{ program.name }} — Advisor{% endblock %}
+
+{% block content %}
+
+{% set eligible_codes = eligible | map(attribute='code') | list %}
+
+{# ── Header ─────────────────────────────────────────────────────────────────── #}
+<div class="d-flex align-items-start justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="fw-bold mb-0">{{ program.name }}</h2>
+    <span class="text-muted small">{{ program.category }} · {{ program.year }}</span>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if in_plan %}
+    <span class="btn btn-sm btn-success disabled">
+      <i class="bi bi-check me-1"></i>In My Plan
+    </span>
+    {% else %}
+    <form method="POST" action="{{ url_for('my_plan_add') }}" class="d-inline">
+      <input type="hidden" name="slug" value="{{ program.slug }}">
+      <button type="submit" class="btn btn-sm btn-outline-success">
+        <i class="bi bi-plus me-1"></i>Add to My Plan
+      </button>
+    </form>
+    {% endif %}
+    <a href="{{ url_for('audit', slug=program.slug) }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-clipboard-check me-1"></i>Full Audit
+    </a>
+    <form method="POST" action="{{ url_for('reset', slug=program.slug) }}" class="d-inline">
+      <button class="btn btn-outline-danger btn-sm"
+              onclick="return confirm('Reset all progress?')">
+        <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+      </button>
+    </form>
+  </div>
+</div>
+
+{# Completion progress bar #}
+<div class="mb-4">
+  <div class="d-flex justify-content-between small text-muted mb-1">
+    <span>Overall completion</span>
+    <span>{{ audit.completion_pct }}%
+      {% if audit.graduation_eligible %}
+        <span class="badge bg-success ms-1">Graduation Eligible</span>
+      {% endif %}
+    </span>
+  </div>
+  <div class="progress" style="height:10px">
+    <div class="progress-bar bg-success" style="width:{{ audit.completion_pct }}%"></div>
+  </div>
+</div>
+
+<div class="row g-4">
+
+{# ── Left: Checklist ─────────────────────────────────────────────────────────── #}
+<div class="col-lg-5">
+  <div class="card shadow-sm">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span class="fw-semibold"><i class="bi bi-check2-square me-2"></i>Requirements</span>
+      <button class="btn btn-sm btn-outline-secondary" id="expand-all">Expand All</button>
+    </div>
+    <div class="accordion accordion-flush" id="requirements-accordion">
+      {% for block in blocks %}
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button {% if block.done == 0 and block.total > 0 %}collapsed{% endif %} py-2"
+                  type="button" data-bs-toggle="collapse"
+                  data-bs-target="#block-{{ loop.index }}">
+            <div class="d-flex justify-content-between w-100 me-3 align-items-center">
+              <span class="small fw-semibold">{{ block.title }}</span>
+              {% if block.total == 0 %}
+              <span class="badge bg-light text-muted border ms-2" style="font-size:.7rem">—</span>
+              {% else %}
+              <span class="badge {% if block.done > 0 %}bg-success{% else %}bg-secondary{% endif %} ms-2"
+                    style="font-size:.7rem">
+                {{ block.done }}/{{ block.total }}
+              </span>
+              {% endif %}
+            </div>
+          </button>
+        </h2>
+        <div id="block-{{ loop.index }}"
+             class="accordion-collapse collapse {% if block.done > 0 or block.total == 0 %}show{% endif %}">
+          <div class="accordion-body py-2 px-3">
+            {% if block.notes %}
+            <p class="text-muted small fst-italic mb-2">{{ block.notes }}</p>
+            {% elif block.total == 0 and not block.courses %}
+            <p class="text-muted small fst-italic mb-2">Consult your advisor for course options.</p>
+            {% endif %}
+            {% for course in block.courses %}
+              {% if course.code %}
+              {% set is_done = course.code | is_completed(completed) %}
+              {% set is_eligible = course.code in eligible_codes %}
+              <div class="form-check py-1 border-bottom">
+                <input class="form-check-input auto-save-checkbox" type="checkbox"
+                       value="{{ course.code }}"
+                       id="c-{{ course.code | replace(' ', '-') | replace('/', '-') }}"
+                       {% if is_done %}checked{% endif %}>
+                <label class="form-check-label d-flex justify-content-between align-items-center small"
+                       for="c-{{ course.code | replace(' ', '-') | replace('/', '-') }}">
+                  <span>
+                    <a href="{{ url_for('course_detail', code=course.code) }}"
+                       class="text-decoration-none fw-semibold">{{ course.code }}</a>
+                    <span class="text-muted ms-1">{{ course.title[:45] }}{% if course.title|length > 45 %}…{% endif %}</span>
+                  </span>
+                  <span class="d-flex align-items-center gap-2 flex-shrink-0 ms-2">
+                    <span class="text-muted" style="white-space:nowrap">{{ course.credits }} cr</span>
+                    {% if not is_done and not is_eligible %}
+                    <button type="button"
+                            class="btn btn-link p-0 why-btn text-warning"
+                            style="font-size:.75rem;line-height:1;text-decoration:none"
+                            data-code="{{ course.code }}"
+                            data-title="{{ course.title }}"
+                            data-credits="{{ course.credits }}"
+                            data-target="why-{{ course.code | replace(' ', '-') | replace('/', '-') }}">
+                      <i class="bi bi-question-circle"></i>
+                    </button>
+                    {% endif %}
+                  </span>
+                </label>
+                {% if not is_done and not is_eligible %}
+                <div class="why-result small ps-4 pt-1 d-none"
+                     id="why-{{ course.code | replace(' ', '-') | replace('/', '-') }}"></div>
+                {% endif %}
+              </div>
+              {% else %}
+              <div class="small text-muted py-1 fst-italic border-bottom">{{ course.title }}</div>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="card-footer d-flex gap-2 align-items-center">
+      <span class="text-muted small" id="save-status"></span>
+    </div>
+  </div>
+
+  {# Add course from outside program #}
+  <div class="card shadow-sm mt-3">
+    <div class="card-header fw-semibold small">
+      <i class="bi bi-plus-circle me-2"></i>Add Course from Outside Program
+    </div>
+    <div class="card-body">
+      <form method="POST" action="{{ url_for('add_course', slug=program.slug) }}"
+            class="d-flex gap-2">
+        <input type="text" name="course_code" id="course-search"
+               class="form-control form-control-sm" placeholder="e.g. PHIL 201"
+               autocomplete="off">
+        <button type="submit" class="btn btn-sm btn-outline-primary">Add</button>
+      </form>
+      <div id="course-suggestions" class="list-group mt-1 position-absolute"
+           style="z-index:100;max-width:300px"></div>
+      <div class="text-muted small mt-1">Courses added here count toward prerequisite checks.</div>
+    </div>
+  </div>
+</div>
+
+{# ── Right: Results ──────────────────────────────────────────────────────────── #}
+<div class="col-lg-7">
+
+  {# Eligible courses (Modus Ponens) #}
+  <div class="card shadow-sm">
+    <div class="card-header d-flex align-items-center gap-2">
+      <span class="fw-semibold">
+        <i class="bi bi-arrow-right-circle text-success me-1"></i>What You Can Take Now
+      </span>
+      <span class="badge bg-success ms-auto">{{ eligible | length }} courses</span>
+      <span class="badge bg-light text-dark border" style="font-size:.65rem">Modus Ponens</span>
+    </div>
+    <div class="card-body p-0">
+      {% if eligible %}
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Course</th><th>Title</th><th class="text-end">Credits</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in eligible %}
+            <tr>
+              <td>
+                <a href="{{ url_for('course_detail', code=c.code) }}"
+                   class="fw-semibold text-decoration-none">{{ c.code }}</a>
+              </td>
+              <td class="text-muted small">{{ c.title }}</td>
+              <td class="text-end text-muted small">{{ c.credits }}</td>
+              <td class="text-end">
+                <button type="button"
+                        class="btn btn-sm btn-outline-primary py-0 add-to-plan-btn"
+                        data-code="{{ c.code }}"
+                        data-title="{{ c.title }}"
+                        data-credits="{{ c.credits }}">
+                  <i class="bi bi-plus"></i>
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="text-muted p-3 mb-0 small">
+        Check off completed courses to see what you're eligible for next.
+      </p>
+      {% endif %}
+    </div>
+  </div>
+
+  {# Semester planner #}
+  <div class="card shadow-sm mt-4">
+    <div class="card-header d-flex align-items-center gap-2">
+      <span class="fw-semibold">
+        <i class="bi bi-calendar-plus me-2"></i>My Upcoming Semester
+      </span>
+      <span class="badge bg-secondary ms-auto" id="plan-credits">0 cr</span>
+    </div>
+    <div id="plan-empty" class="text-muted small p-3">
+      Click <i class="bi bi-plus"></i> next to a course above to add it to your semester.
+    </div>
+    <div id="plan-list"></div>
+    <div id="plan-warning" class="d-none alert alert-danger mx-3 mb-3 py-2 small mt-2">
+      <i class="bi bi-exclamation-triangle-fill me-1"></i>
+      You are over the {{ "21" }}-credit limit. Please remove a course.
+    </div>
+  </div>
+
+</div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// ── Auto-save checkboxes ──────────────────────────────────────────────────────
+let reloadTimer;
+const saveStatus = document.getElementById('save-status');
+
+document.querySelectorAll('.auto-save-checkbox').forEach(cb => {
+  cb.addEventListener('change', async function() {
+    saveStatus.textContent = 'Saving…';
+    try {
+      await fetch('/api/toggle-course', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({code: this.value, checked: this.checked}),
+      });
+      saveStatus.textContent = 'Saved ✓';
+    } catch(e) {
+      saveStatus.textContent = 'Error saving';
+    }
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => window.location.reload(), 1200);
+  });
+});
+
+// ── Course search autocomplete ────────────────────────────────────────────────
+const searchInput    = document.getElementById('course-search');
+const suggestionsBox = document.getElementById('course-suggestions');
+
+searchInput.addEventListener('input', async function() {
+  const q = this.value.trim();
+  suggestionsBox.innerHTML = '';
+  if (q.length < 2) return;
+
+  const res  = await fetch(`/api/courses?q=${encodeURIComponent(q)}`);
+  const data = await res.json();
+
+  data.forEach(course => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'list-group-item list-group-item-action py-1 small';
+    item.innerHTML = `<strong>${course.code}</strong> — ${course.title}`;
+    item.addEventListener('click', () => {
+      searchInput.value = course.code;
+      suggestionsBox.innerHTML = '';
+    });
+    suggestionsBox.appendChild(item);
+  });
+});
+
+document.addEventListener('click', e => {
+  if (!searchInput.contains(e.target)) suggestionsBox.innerHTML = '';
+});
+
+// ── Inline Why Blocked ────────────────────────────────────────────────────────
+function renderCourseRef(c) {
+  if (typeof c === 'string') return `<strong>${c}</strong>`;
+  return `<strong>${c.code}</strong>${c.title ? ' — ' + c.title : ''}`;
+}
+
+function renderBlockedResult(data, code, title, credits) {
+  if (data.already_completed)
+    return `<span class="text-success"><i class="bi bi-check-circle me-1"></i>Already completed.</span>`;
+  if (!data.blocked)
+    return `<span class="text-success"><i class="bi bi-check-circle me-1"></i>You are eligible right now.</span>`;
+  if (data.reason)
+    return `<span class="text-muted">${data.reason}</span>`;
+
+  let html = `<span class="text-danger fw-semibold">Missing prerequisites:</span><ul class="mb-1 mt-1">`;
+
+  if (data.missing_groups && data.missing_groups.length) {
+    data.missing_groups.forEach(group => {
+      html += `<li>${group.map(renderCourseRef).join(' <span class="text-muted">or</span> ')}</li>`;
+    });
+  }
+
+  if (data.root_causes && data.root_causes.length) {
+    data.root_causes.forEach(rc => {
+      rc.missing_groups && rc.missing_groups.forEach(g => {
+        html += `<li class="text-muted">${g.map(renderCourseRef).join(' or ')}</li>`;
+      });
+    });
+  }
+
+  if (data.violated_exclusions && data.violated_exclusions.length) {
+    html += `<li class="text-warning">Excluded by: ${data.violated_exclusions.join(', ')}</li>`;
+  }
+
+  html += `</ul>`;
+  html += `<button type="button"
+             class="btn btn-outline-warning btn-sm py-0 px-2 mt-1 add-to-plan-btn"
+             style="font-size:.7rem"
+             data-code="${code}"
+             data-title="${title}"
+             data-credits="${credits}">
+             Add to semester anyway
+           </button>`;
+  return html;
+}
+
+document.querySelectorAll('.why-btn').forEach(btn => {
+  btn.addEventListener('click', async function(e) {
+    e.preventDefault();
+    const code     = this.dataset.code;
+    const title    = this.dataset.title || '';
+    const credits  = this.dataset.credits || '3';
+    const targetId = this.dataset.target;
+    const resultDiv = document.getElementById(targetId);
+
+    // Toggle off if already shown
+    if (!resultDiv.classList.contains('d-none') && resultDiv.innerHTML) {
+      resultDiv.classList.add('d-none');
+      return;
+    }
+
+    // Fetch and show
+    const res  = await fetch(`/api/why-blocked?code=${encodeURIComponent(code)}`);
+    const data = await res.json();
+    resultDiv.innerHTML = renderBlockedResult(data, code, title, credits);
+    resultDiv.classList.remove('d-none');
+    syncAddButtons();
+  });
+});
+
+// ── Expand all accordion ──────────────────────────────────────────────────────
+document.getElementById('expand-all').addEventListener('click', function() {
+  const allCollapses = document.querySelectorAll('#requirements-accordion .accordion-collapse');
+  const anyHidden = [...allCollapses].some(el => !el.classList.contains('show'));
+  allCollapses.forEach(el => {
+    const bsCollapse = bootstrap.Collapse.getOrCreateInstance(el, {toggle: false});
+    anyHidden ? bsCollapse.show() : bsCollapse.hide();
+  });
+  this.textContent = anyHidden ? 'Collapse All' : 'Expand All';
+});
+</script>
+{% endblock %}

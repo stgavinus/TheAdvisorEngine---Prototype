@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}{{ node.code }} — The Advisor Engine{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-lg-8">
+
+    {# ── Course header ─────────────────────────────────────────────────────── #}
+    <div class="mb-4">
+      <div class="d-flex align-items-start gap-3 flex-wrap">
+        <div>
+          <h2 class="fw-bold mb-0">{{ node.code }}</h2>
+          <p class="text-muted mb-1">{{ node.title }}</p>
+          <div class="d-flex gap-2 flex-wrap">
+            {% if node.credits %}
+            <span class="badge bg-secondary">{{ node.credits }} credits</span>
+            {% endif %}
+            {% if node.code | is_completed(completed) %}
+            <span class="badge bg-success"><i class="bi bi-check2 me-1"></i>Completed</span>
+            {% elif not blocked.blocked %}
+            <span class="badge bg-primary"><i class="bi bi-unlock me-1"></i>Eligible</span>
+            {% else %}
+            <span class="badge bg-danger"><i class="bi bi-lock me-1"></i>Blocked</span>
+            {% endif %}
+            {% if node.url %}
+            <a href="{{ node.url }}" target="_blank" rel="noopener"
+               class="badge bg-light text-dark border text-decoration-none">
+              <i class="bi bi-box-arrow-up-right me-1"></i>View in Catalog
+            </a>
+            {% endif %}
+          </div>
+        </div>
+        {% if current_program %}
+        <a href="{{ url_for('advisor', slug=current_program) }}"
+           class="btn btn-sm btn-outline-secondary ms-auto">
+          <i class="bi bi-arrow-left me-1"></i>Back to Plan
+        </a>
+        {% endif %}
+      </div>
+    </div>
+
+    {# ── Description ───────────────────────────────────────────────────────── #}
+    {% if node.description %}
+    <div class="card shadow-sm mb-4">
+      <div class="card-body">
+        <p class="mb-0">{{ node.description }}</p>
+      </div>
+    </div>
+    {% endif %}
+
+    {# ── Prerequisites ─────────────────────────────────────────────────────── #}
+    <div class="card shadow-sm mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="fw-semibold"><i class="bi bi-diagram-3 me-2"></i>Prerequisites</span>
+        <span class="badge bg-light text-dark border" style="font-size:.65rem">Modus Ponens</span>
+      </div>
+      <div class="card-body">
+        {% if prereq_groups %}
+        <ul class="list-unstyled mb-0">
+          {% for group in prereq_groups %}
+          <li class="py-1 border-bottom d-flex align-items-center gap-2 flex-wrap">
+            {% for c in group %}
+              <a href="{{ url_for('course_detail', code=c.code) }}"
+                 class="fw-semibold text-decoration-none">{{ c.code }}</a>
+              {% if c.title %}<span class="text-muted small">— {{ c.title }}</span>{% endif %}
+              {% if c.completed %}<span class="badge bg-success" style="font-size:.65rem">✓ Done</span>{% endif %}
+              {% if not loop.last %}<span class="text-muted small fst-italic">or</span>{% endif %}
+            {% endfor %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-muted small mb-0">No prerequisites.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    {# ── Why blocked? ──────────────────────────────────────────────────────── #}
+    {% if blocked.blocked %}
+    <div class="card shadow-sm border-danger mb-4">
+      <div class="card-header bg-danger text-white d-flex align-items-center gap-2">
+        <i class="bi bi-shield-x"></i>
+        <span class="fw-semibold">Why You're Blocked</span>
+        <span class="badge bg-light text-dark ms-auto" style="font-size:.65rem">Modus Tollens</span>
+      </div>
+      <div class="card-body">
+        {% if blocked.missing_groups %}
+        <p class="small fw-semibold mb-1">Missing prerequisites:</p>
+        <ul class="small mb-2">
+          {% for group in blocked.missing_groups %}
+          <li>
+            {% for code in group %}
+              <a href="{{ url_for('course_detail', code=code) }}"
+                 class="fw-semibold text-decoration-none">{{ code }}</a>
+              {% if not loop.last %} <span class="text-muted">or</span> {% endif %}
+            {% endfor %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+
+        {% if blocked.root_causes %}
+        <p class="small fw-semibold mb-1 text-muted">Root causes (earliest missing):</p>
+        <ul class="small mb-0">
+          {% for rc in blocked.root_causes %}
+            {% for group in rc.missing_groups %}
+            <li>
+              <a href="{{ url_for('course_detail', code=rc.code) }}"
+                 class="text-decoration-none">{{ rc.code }}</a>
+              requires:
+              {% for code in group %}
+                <span class="fw-semibold">{{ code }}</span>
+                {% if not loop.last %} or {% endif %}
+              {% endfor %}
+            </li>
+            {% endfor %}
+          {% endfor %}
+        </ul>
+        {% endif %}
+
+        {% if blocked.violated_exclusions %}
+        <p class="small mb-0 mt-2 text-warning">
+          <i class="bi bi-exclamation-triangle me-1"></i>
+          You have taken {{ blocked.violated_exclusions | join(', ') }}, which excludes you from this course.
+        </p>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {# ── Cross-listed ──────────────────────────────────────────────────────── #}
+    {% if node.cross_listed %}
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold small">Cross-listed as</div>
+      <div class="card-body small">{{ node.cross_listed }}</div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  {# ── Right sidebar: programs ───────────────────────────────────────────────── #}
+  <div class="col-lg-4">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold small">
+        <i class="bi bi-collection me-2"></i>Appears In
+      </div>
+      <div class="list-group list-group-flush">
+        {% for p in programs_with %}
+        <a href="{{ url_for('advisor', slug=p.slug) }}"
+           class="list-group-item list-group-item-action small py-2">
+          {{ p.name }}
+        </a>
+        {% else %}
+        <div class="list-group-item small text-muted">Not linked to any program.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

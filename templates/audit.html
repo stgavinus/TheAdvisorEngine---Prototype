@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Degree Audit — {{ program.name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h2 class="fw-bold mb-0">Degree Audit</h2>
+    <p class="text-muted mb-0">{{ program.name }}</p>
+  </div>
+  <a href="{{ url_for('advisor', slug=program.slug) }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left me-1"></i>Back to Plan
+  </a>
+</div>
+
+{# ── Overview stats ─────────────────────────────────────────────────────────── #}
+<div class="row g-3 mb-4">
+  <div class="col-sm-4">
+    <div class="card text-center shadow-sm">
+      <div class="card-body py-3">
+        <div class="display-6 fw-bold {% if audit.graduation_eligible %}text-success{% else %}text-primary{% endif %}">
+          {{ audit.completion_pct }}%
+        </div>
+        <div class="small text-muted">Complete</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-4">
+    <div class="card text-center shadow-sm">
+      <div class="card-body py-3">
+        <div class="display-6 fw-bold text-dark">{{ audit.total_satisfied }}/{{ audit.total_required }}</div>
+        <div class="small text-muted">Requirements Met</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-4">
+    <div class="card text-center shadow-sm">
+      <div class="card-body py-3">
+        {% if audit.graduation_eligible %}
+        <div class="display-6 fw-bold text-success"><i class="bi bi-patch-check-fill"></i></div>
+        <div class="small text-success fw-semibold">Graduation Eligible</div>
+        {% else %}
+        <div class="display-6 fw-bold text-secondary">
+          {{ audit.blocks | selectattr('met') | list | length }}/{{ audit.blocks | length }}
+        </div>
+        <div class="small text-muted">Blocks Satisfied</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Block-by-block ─────────────────────────────────────────────────────────── #}
+<div class="card shadow-sm">
+  <div class="card-header fw-semibold">
+    <i class="bi bi-list-check me-2"></i>Requirement Blocks
+    <span class="badge bg-light text-dark border ms-2" style="font-size:.65rem">
+      ∀ blocks satisfied → graduation eligible
+    </span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th style="width:40%">Block</th>
+          <th>Progress</th>
+          <th class="text-center">Required</th>
+          <th class="text-center">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for block in audit.blocks %}
+        <tr>
+          <td class="small fw-semibold">{{ block.title }}</td>
+          <td>
+            {% set pct = (block.satisfied_count / block.required_count * 100) | int if block.required_count else 0 %}
+            <div class="progress" style="height:6px;min-width:80px">
+              <div class="progress-bar {% if block.met %}bg-success{% else %}bg-warning{% endif %}"
+                   style="width:{{ [pct, 100] | min }}%"></div>
+            </div>
+            <span class="text-muted" style="font-size:.75rem">
+              {{ block.satisfied_count }}/{{ block.required_count }}
+            </span>
+          </td>
+          <td class="text-center small text-muted">
+            {% if block.required_count == 0 %}All{% else %}{{ block.required_count }}{% endif %}
+          </td>
+          <td class="text-center">
+            {% if block.met %}
+            <i class="bi bi-check-circle-fill text-success"></i>
+            {% else %}
+            <i class="bi bi-x-circle-fill text-danger"></i>
+            {% endif %}
+          </td>
+        </tr>
+
+        {# Remaining courses for unmet blocks #}
+        {% if not block.met and block.remaining_courses %}
+        <tr class="table-light">
+          <td colspan="4" class="py-1 ps-4">
+            <span class="text-muted small">Still needed: </span>
+            {% for c in block.remaining_courses %}
+            <a href="{{ url_for('course_detail', code=c.code) }}"
+               class="badge bg-light text-dark border text-decoration-none me-1 small"
+               title="{{ c.title }}">{{ c.code }}</a>
+            {% endfor %}
+            {% if block.remaining_total > (block.remaining_courses | length) %}
+            <span class="text-muted small">+ {{ block.remaining_total - (block.remaining_courses | length) }} more</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

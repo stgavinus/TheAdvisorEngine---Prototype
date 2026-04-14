@@ -53,14 +53,68 @@ def discover_programs(year: str) -> list[dict]:
     return programs
 
 
+def expand_subplans(programs: list[dict], workers: int) -> list[dict]:
+    """
+    For each program that is a hub page (links out to sub-plan pages),
+    replace it with separate entries — one per sub-plan, plus one for the
+    base requirements if present.  Normal programs pass through unchanged.
+    Runs detect_subplans() in parallel for speed.
+    """
+    from src.scraper import detect_subplans
+
+    print(f"\nChecking {len(programs)} programs for sub-plans ({workers} workers)...")
+    expanded: list[dict] = []
+    sub_count = 0
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(detect_subplans, p["url"]): p for p in programs}
+        for future in as_completed(futures):
+            p = futures[future]
+            try:
+                result = future.result()
+            except Exception:
+                expanded.append(p)
+                continue
+
+            if not result["subplans"]:
+                expanded.append(p)
+                continue
+
+            base_url  = result["base_url"]
+            sub_count += len(result["subplans"])
+            print(f"  {p['name']} → {len(result['subplans'])} sub-plans")
+
+            # Keep the base requirements as a standalone entry if the page exists
+            if base_url:
+                expanded.append({**p, "url": base_url, "base_url": None})
+
+            # One entry per sub-plan; slug is composite to stay unique in the DB
+            for sp in result["subplans"]:
+                expanded.append({
+                    "name":     f"{p['name']} — {sp['name']}",
+                    "category": p["category"],
+                    "url":      sp["url"],
+                    "slug":     f"{p['slug']}--{sp['slug']}",
+                    "base_url": base_url,
+                })
+
+    print(f"  Found {sub_count} sub-plans total.")
+    return expanded
+
+
 def stage1(programs: list[dict], year: str, workers: int, db: DatabaseManager):
     print(f"\nStage 1: Scraping {len(programs)} programs ({workers} workers)...")
-    all_slugs = {p["slug"] for p in programs}
+    # Use actual URL segments for cross-program link filtering, not synthetic slugs
+    all_slugs = {p["url"].rstrip("/").split("/")[-1] for p in programs}
     scraper   = ProgramScraper(all_slugs)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(scraper.scrape, p["name"], p["category"], p["url"], p["slug"], year): p
+            executor.submit(
+                scraper.scrape,
+                p["name"], p["category"], p["url"], p["slug"], year,
+                p.get("base_url"),
+            ): p
             for p in programs
         }
         for i, future in enumerate(as_completed(futures), 1):
@@ -133,6 +187,7 @@ def main():
                 return
             programs = [target]
 
+        programs = expand_subplans(programs, args.workers)
         stage1(programs, args.year, args.workers, db)
 
     if not args.no_details:

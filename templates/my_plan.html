@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %}My Academic Plan — The Advisor Engine{% endblock %}
+
+{% block content %}
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <h2 class="fw-bold mb-0">My Academic Plan</h2>
+</div>
+
+{# ── My Programs ─────────────────────────────────────────────────────────────── #}
+<div class="card shadow-sm mb-4">
+  <div class="card-header fw-semibold">
+    <i class="bi bi-collection me-2"></i>My Programs
+  </div>
+  <div class="card-body">
+    {% if programs %}
+    <div class="d-flex flex-wrap gap-2 mb-3">
+      {% for p in programs %}
+      <span class="badge d-inline-flex align-items-center gap-2 py-2 px-3"
+            style="background-color:var(--cua-blue);font-size:.85rem;font-weight:500">
+        <span>
+          {{ p.name }}
+          <span class="opacity-75 fw-normal ms-1" style="font-size:.75rem">
+            {% if p.category == "Minors" %}Minor
+            {% elif p.category == "Certificates" %}Certificate
+            {% elif p.category == "Associate Degrees" %}Associate
+            {% else %}Major
+            {% endif %}
+          </span>
+        </span>
+        <form method="POST" action="{{ url_for('my_plan_remove') }}" class="d-inline">
+          <input type="hidden" name="slug" value="{{ p.slug }}">
+          <button type="submit" class="btn-close btn-close-white" style="font-size:.55rem"
+                  aria-label="Remove {{ p.name }}"></button>
+        </form>
+      </span>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {# Add program #}
+    <div class="position-relative" style="max-width:420px">
+      <form method="POST" action="{{ url_for('my_plan_add') }}" id="add-program-form"
+            class="d-flex gap-2">
+        <input type="hidden" name="slug" id="add-slug">
+        <input type="text" id="program-search" class="form-control form-control-sm"
+               placeholder="Search for a major or minor to add…" autocomplete="off">
+        <button type="submit" class="btn btn-sm btn-primary flex-shrink-0"
+                id="add-btn" disabled>Add</button>
+      </form>
+      <div id="program-suggestions"
+           class="list-group mt-1 position-absolute w-100" style="z-index:100"></div>
+    </div>
+    {% if not programs %}
+    <p class="text-muted small mt-2 mb-0">Search above to add your major and any minors.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% if programs %}
+
+{# ── Progress ────────────────────────────────────────────────────────────────── #}
+<div class="card shadow-sm mb-4">
+  <div class="card-header fw-semibold">
+    <i class="bi bi-bar-chart-fill me-2"></i>Progress
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+      {% for p in programs %}
+      <div class="col-md-6">
+        <div class="d-flex justify-content-between small mb-1">
+          <a href="{{ url_for('advisor', slug=p.slug) }}" class="fw-semibold text-decoration-none">
+            {{ p.name }}
+          </a>
+          <span class="text-muted">
+            {{ p.audit.completion_pct }}%
+            {% if p.audit.graduation_eligible %}
+            <span class="badge bg-success ms-1" style="font-size:.65rem">Eligible</span>
+            {% endif %}
+          </span>
+        </div>
+        <div class="progress" style="height:8px">
+          <div class="progress-bar bg-success" style="width:{{ p.audit.completion_pct }}%"></div>
+        </div>
+        <div class="text-muted" style="font-size:.7rem;margin-top:3px">
+          {{ p.audit.total_satisfied }}/{{ p.audit.total_required }} requirements met
+          · <a href="{{ url_for('audit', slug=p.slug) }}" class="text-decoration-none">Full audit</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+
+{# ── Left: What You Can Take Now ─────────────────────────────────────────────── #}
+<div class="col-lg-5">
+  <div class="card shadow-sm">
+    <div class="card-header d-flex align-items-center gap-2">
+      <span class="fw-semibold">
+        <i class="bi bi-arrow-right-circle text-success me-1"></i>What You Can Take Now
+      </span>
+      <span class="badge bg-success ms-auto">{{ eligible | length }}</span>
+      <span class="badge bg-light border" style="font-size:.65rem;color:#0a3257">Modus Ponens</span>
+    </div>
+    <div class="card-body p-0">
+      {% if eligible %}
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0">
+          <thead class="table-light">
+            <tr><th>Course</th><th>Title</th><th class="text-end">Cr</th><th></th></tr>
+          </thead>
+          <tbody>
+            {% for c in eligible %}
+            <tr>
+              <td>
+                <a href="{{ url_for('course_detail', code=c.code) }}"
+                   class="fw-semibold text-decoration-none">{{ c.code }}</a>
+              </td>
+              <td class="text-muted small">{{ c.title }}</td>
+              <td class="text-end text-muted small">{{ c.credits }}</td>
+              <td class="text-end">
+                <button type="button"
+                        class="btn btn-sm btn-outline-primary py-0 add-to-plan-btn"
+                        data-code="{{ c.code }}"
+                        data-title="{{ c.title }}"
+                        data-credits="{{ c.credits }}">
+                  <i class="bi bi-plus"></i>
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="text-muted small p-3 mb-0">
+        Check off completed courses on each program's checklist to see what you're eligible for.
+      </p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{# ── Right: Semester planner ─────────────────────────────────────────────────── #}
+<div class="col-lg-7">
+  <div class="card shadow-sm">
+    <div class="card-header d-flex align-items-center gap-2">
+      <span class="fw-semibold">
+        <i class="bi bi-calendar-plus me-2"></i>My Upcoming Semester
+      </span>
+      <span class="badge bg-secondary ms-auto" id="plan-credits">0 cr</span>
+    </div>
+    <div id="plan-empty" class="text-muted small p-3">
+      Click <i class="bi bi-plus"></i> next to a course to add it to your semester.
+    </div>
+    <div id="plan-list"></div>
+    <div id="plan-warning" class="d-none alert alert-danger mx-3 mb-3 py-2 small mt-2">
+      <i class="bi bi-exclamation-triangle-fill me-1"></i>
+      You are over the 21-credit limit. Please remove a course.
+    </div>
+    <div class="card-footer">
+      <div class="text-muted" style="font-size:.7rem">
+        Plan is saved in your browser. Maximum 21 credits per semester without special permission.
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+{% else %}
+{# Empty state #}
+<div class="text-center py-5 text-muted">
+  <i class="bi bi-mortarboard" style="font-size:3rem;opacity:.4"></i>
+  <p class="mt-3 mb-3">Add your major and minors above to get started.</p>
+  <a href="{{ url_for('index') }}" class="btn btn-outline-primary btn-sm">
+    <i class="bi bi-grid me-1"></i>Browse All Programs
+  </a>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const searchInput = document.getElementById('program-search');
+const suggestions = document.getElementById('program-suggestions');
+const slugInput   = document.getElementById('add-slug');
+const addBtn      = document.getElementById('add-btn');
+
+if (searchInput) {
+  searchInput.addEventListener('input', async function() {
+    const q = this.value.trim();
+    suggestions.innerHTML = '';
+    slugInput.value = '';
+    addBtn.disabled = true;
+    if (q.length < 2) return;
+
+    const res  = await fetch(`/api/programs?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+
+    data.forEach(p => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'list-group-item list-group-item-action py-2 small';
+      item.innerHTML = `<strong>${p.name}</strong> <span class="text-muted ms-1">${p.category}</span>`;
+      item.addEventListener('click', () => {
+        searchInput.value = p.name;
+        slugInput.value   = p.slug;
+        addBtn.disabled   = false;
+        suggestions.innerHTML = '';
+      });
+      suggestions.appendChild(item);
+    });
+  });
+
+  document.addEventListener('click', e => {
+    if (!searchInput.contains(e.target)) suggestions.innerHTML = '';
+  });
+}
+</script>
+{% endblock %}

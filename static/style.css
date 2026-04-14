@@ -1,0 +1,96 @@
+/* CUA brand colors */
+:root {
+  --cua-red:  #B30000;
+  --cua-blue: #0a3257;
+  --cua-gold: #C8A84B;
+}
+
+body {
+  background-color: #f8f9fa;
+  color: #0a3257;
+}
+[data-bs-theme="dark"] body {
+  background-color: #111318;
+  color: inherit;
+}
+
+/* Red: structural/navbar elements */
+.btn-outline-danger        { color: var(--cua-red); border-color: var(--cua-red); }
+.progress-bar.bg-success   { background-color: var(--cua-red) !important; }
+
+/* Blue: links, buttons, text highlights */
+.btn-outline-primary       { color: var(--cua-blue); border-color: var(--cua-blue); }
+.btn-outline-primary:hover { background-color: var(--cua-blue); border-color: var(--cua-blue); color: #fff; }
+.btn-primary               { background-color: var(--cua-blue); border-color: var(--cua-blue); }
+.btn-primary:hover         { background-color: #072440; border-color: #072440; }
+.text-primary              { color: var(--cua-blue) !important; }
+.bg-primary                { background-color: var(--cua-blue) !important; }
+a                          { color: var(--cua-blue); }
+a:hover                    { color: #072440; }
+
+/* Program cards */
+.program-card {
+  transition: transform .15s ease, box-shadow .15s ease;
+  border: 1px solid #e9ecef;
+}
+.program-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,.1) !important;
+  border-color: rgba(10,50,87,.3);
+}
+
+/* Checklist accordion */
+.accordion-button {
+  font-size: .875rem;
+}
+.accordion-button:not(.collapsed) {
+  background-color: #e8eef5;
+  color: var(--cua-blue);
+}
+.accordion-button:focus {
+  box-shadow: 0 0 0 .2rem rgba(10,50,87,.2);
+}
+.accordion-button::after {
+  margin-left: .5rem;
+}
+
+
+/* Cytoscape container cursor */
+#cy {
+  cursor: grab;
+}
+#cy:active {
+  cursor: grabbing;
+}
+
+/* Subtle table borders */
+.table > :not(caption) > * > * {
+  border-bottom-color: #f0f0f0;
+}
+
+/* ── Dark mode overrides ──────────────────────────────────────────────────── */
+[data-bs-theme="dark"] {
+  --cua-blue: #5b9bd5;
+}
+[data-bs-theme="dark"] a                          { color: #5b9bd5; }
+[data-bs-theme="dark"] a:hover                    { color: #82b4e0; }
+[data-bs-theme="dark"] .text-primary              { color: #5b9bd5 !important; }
+[data-bs-theme="dark"] .btn-primary               { background-color: #5b9bd5; border-color: #5b9bd5; color: #fff; }
+[data-bs-theme="dark"] .btn-primary:hover         { background-color: #4a8ac4; border-color: #4a8ac4; }
+[data-bs-theme="dark"] .btn-outline-primary       { color: #5b9bd5; border-color: #5b9bd5; }
+[data-bs-theme="dark"] .btn-outline-primary:hover { background-color: #5b9bd5; color: #fff; }
+[data-bs-theme="dark"] .accordion-button:not(.collapsed) {
+  background-color: #1e2d3d;
+  color: #5b9bd5;
+}
+[data-bs-theme="dark"] .table > :not(caption) > * > * {
+  border-bottom-color: #2d2d2d;
+}
+[data-bs-theme="dark"] .program-card:hover {
+  border-color: rgba(91,155,213,.3);
+}
+[data-bs-theme="dark"] .table-light,
+[data-bs-theme="dark"] .table-light th {
+  background-color: #1e2128 !important;
+  color: inherit;
+}

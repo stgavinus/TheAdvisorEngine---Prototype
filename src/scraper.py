@@ -188,14 +188,71 @@ def _should_follow(url: str, base_url: str, slug: str, all_slugs: set[str]) -> b
     return url.startswith(base_url)
 
 
+def detect_subplans(url: str) -> dict:
+    """
+    Fetch a program's main page and identify sub-plan structure.
+
+    Looks for direct child links whose URL segment contains:
+      - "sub-plan"    → a concentration/track students choose from
+      - "requirement" → the shared base requirements page
+
+    Returns:
+      {
+        "base_url": str | None,  # URL of the -requirements sub-page, if found
+        "subplans": [{"name": str, "url": str, "slug": str}, ...]
+      }
+    If no sub-plans are found, returns {"base_url": None, "subplans": []}.
+    """
+    result: dict = {"base_url": None, "subplans": []}
+    soup = _get_soup(url)
+    if not soup:
+        return result
+
+    base = url.rstrip("/")
+    seen: set[str] = set()
+
+    for a in soup.find_all("a", href=True):
+        child = urljoin(url, a["href"]).split("#")[0].rstrip("/")
+        if not child.startswith(base + "/"):
+            continue
+        remainder = child[len(base) + 1:]
+        if "/" in remainder:          # not a direct child
+            continue
+        if child in seen:
+            continue
+        seen.add(child)
+
+        link_text    = a.get_text(strip=True)
+        slug_segment = remainder
+
+        if "sub-plan" in slug_segment.lower():
+            # Strip trailing "- Sub-Plan Option" from the link text
+            name = re.sub(r"\s*[-–]\s*sub.?plan\s+option\s*$", "", link_text, flags=re.I).strip()
+            result["subplans"].append({"name": name, "url": child, "slug": slug_segment})
+        elif "requirement" in slug_segment.lower():
+            result["base_url"] = child
+
+    return result
+
+
 class ProgramScraper:
     def __init__(self, all_slugs: set[str]):
         self.all_slugs = all_slugs
 
-    def scrape(self, name: str, category: str, url: str, slug: str, year: str) -> Program:
+    def scrape(self, name: str, category: str, url: str, slug: str, year: str,
+               base_url: str = None) -> Program:
         program = Program(name=name, category=category, url=url, slug=slug, year=year)
         seen_urls: set[str]   = set()
         seen_tables: set[int] = set()
+
+        # Scrape shared base requirements first (single page, no BFS)
+        if base_url:
+            seen_urls.add(base_url.rstrip("/"))
+            soup = _get_soup(base_url)
+            if soup:
+                _parse_page(soup, program, seen_tables)
+
+        # BFS from the program's own URL
         queue = [(url.rstrip("/"), 0)]
 
         while queue:
@@ -210,7 +267,6 @@ class ProgramScraper:
 
             _parse_page(soup, program, seen_tables)
 
-            # Discover sub-pages
             for a in soup.find_all("a", href=True):
                 sub = urljoin(curr_url, a["href"]).split("#")[0].rstrip("/")
                 if sub not in seen_urls and _should_follow(sub, url.rstrip("/"), slug, self.all_slugs):
@@ -232,10 +288,15 @@ class CourseDetailScraper:
         if not main:
             return detail
 
-        # Description: first non-empty paragraph that isn't metadata
-        for p in main.find_all("p"):
-            text = p.get_text(strip=True)
-            if text and not any(k in text.lower() for k in ("prerequisite", "credit", "equivalent")):
+        # Description: first substantial block of text that isn't metadata.
+        # Try <p> first, then direct <div> children (some pages use divs).
+        SKIP_WORDS = ("prerequisite", "credit", "equivalent", "cross listed")
+        for tag in main.find_all(["p", "div"]):
+            # Skip divs that contain nested block elements — they're containers, not text
+            if tag.name == "div" and tag.find(["p", "div", "table", "ul"]):
+                continue
+            text = tag.get_text(strip=True)
+            if len(text) > 40 and not any(k in text.lower() for k in SKIP_WORDS):
                 detail.description = text
                 break
 
