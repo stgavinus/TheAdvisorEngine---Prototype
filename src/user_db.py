@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from pathlib import Path
 
@@ -7,6 +8,7 @@ _DB = Path("data/users.db")
 def init():
     Path("data").mkdir(exist_ok=True)
     conn = sqlite3.connect(_DB)
+    os.chmod(_DB, 0o600)
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             id         TEXT PRIMARY KEY,

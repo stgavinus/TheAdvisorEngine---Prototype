@@ -29,6 +29,7 @@
           </span>
         </span>
         <form method="POST" action="{{ url_for('my_plan_remove') }}" class="d-inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="slug" value="{{ p.slug }}">
           <button type="submit" class="btn-close btn-close-white" style="font-size:.55rem"
                   aria-label="Remove {{ p.name }}"></button>
@@ -42,6 +43,7 @@
     <div class="position-relative" style="max-width:420px">
       <form method="POST" action="{{ url_for('my_plan_add') }}" id="add-program-form"
             class="d-flex gap-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="slug" id="add-slug">
         <input type="text" id="program-search" class="form-control form-control-sm"
                placeholder="Search for a major or minor to add…" autocomplete="off">

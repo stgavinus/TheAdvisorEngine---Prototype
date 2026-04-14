@@ -4,6 +4,15 @@
 const PLAN_KEY    = 'semester_plan';
 const CREDIT_MAX  = 21;
 
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function getPlan() {
   try { return JSON.parse(localStorage.getItem(PLAN_KEY) || '[]'); }
   catch { return []; }
@@ -52,13 +61,13 @@ function renderPlanner() {
     planList.innerHTML = plan.map(c => `
       <div class="d-flex justify-content-between align-items-center small px-3 py-2 border-bottom">
         <div>
-          <a href="/course/${encodeURIComponent(c.code)}" class="fw-semibold text-decoration-none">${c.code}</a>
-          ${c.title ? `<span class="text-muted ms-1">${c.title.substring(0, 45)}${c.title.length > 45 ? '…' : ''}</span>` : ''}
+          <a href="/course/${encodeURIComponent(c.code)}" class="fw-semibold text-decoration-none">${escHtml(c.code)}</a>
+          ${c.title ? `<span class="text-muted ms-1">${escHtml(c.title.substring(0, 45))}${c.title.length > 45 ? '…' : ''}</span>` : ''}
         </div>
         <div class="d-flex align-items-center gap-2 flex-shrink-0 ms-2">
-          <span class="text-muted">${c.credits} cr</span>
+          <span class="text-muted">${escHtml(c.credits)} cr</span>
           <button type="button" class="btn btn-sm btn-outline-danger py-0 px-1 remove-from-plan-btn"
-                  data-code="${c.code}"
+                  data-code="${escHtml(c.code)}"
                   style="font-size:.7rem">✕</button>
         </div>
       </div>

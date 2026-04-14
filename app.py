@@ -1,36 +1,73 @@
 import os
 import sqlite3
 import uuid as uuid_mod
+import secrets
 from pathlib import Path
-from flask import Flask, render_template, request, session, redirect, url_for, jsonify, g
+from flask import Flask, render_template, request, session, redirect, url_for, jsonify, g, abort
+from itsdangerous import URLSafeSerializer, BadSignature
 from src.logic import LogicEngine
 from src import user_db
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
+app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+_signer = URLSafeSerializer(app.secret_key, salt="user-id")
 
 DB_PATH = Path("data/cua_catalog.db")
 engine = LogicEngine(DB_PATH)
 user_db.init()
 
 
+@app.context_processor
+def inject_csrf():
+    return {"csrf_token": lambda: session.get("csrf_token", "")}
+
+
 # ── User identity ───────────────────────────────────────────────────────────────
 
 @app.before_request
 def load_user():
-    uid = request.cookies.get("user_id")
-    g.new_user = not uid
-    if not uid:
+    signed = request.cookies.get("user_id")
+    g.new_user = not signed
+    if signed:
+        try:
+            uid = _signer.loads(signed)
+        except BadSignature:
+            uid = str(uuid_mod.uuid4())
+            g.new_user = True
+    else:
         uid = str(uuid_mod.uuid4())
     g.user_id = uid
     user_db.ensure_user(uid)
 
 
+@app.before_request
+def csrf_protect():
+    if request.method == "POST":
+        token = session.get("csrf_token")
+        if not token:
+            abort(403)
+        # JSON requests send token in header
+        if request.is_json:
+            if request.headers.get("X-CSRF-Token") == token:
+                return
+            abort(403)
+        # Form requests send token as hidden field
+        if request.form.get("csrf_token") != token:
+            abort(403)
+
+
+@app.before_request
+def ensure_csrf_token():
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
+
+
 @app.after_request
 def set_user_cookie(response):
     if g.get("new_user"):
+        signed = _signer.dumps(g.user_id)
         response.set_cookie(
-            "user_id", g.user_id,
+            "user_id", signed,
             max_age=60 * 60 * 24 * 365 * 5,
             samesite="Lax", httponly=True,
         )
@@ -349,7 +386,7 @@ def api_why_blocked():
 
 @app.route("/api/courses")
 def api_courses():
-    q = request.args.get("q", "").strip().upper()
+    q = request.args.get("q", "").strip().upper()[:50]
     if len(q) < 2:
         return jsonify([])
     results = [
@@ -362,7 +399,7 @@ def api_courses():
 
 @app.route("/api/programs")
 def api_programs():
-    q = request.args.get("q", "").strip().lower()
+    q = request.args.get("q", "").strip().lower()[:50]
     if len(q) < 2:
         return jsonify([])
     user_slugs = set(user_db.get_programs(g.user_id))

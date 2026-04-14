@@ -18,6 +18,7 @@
     </span>
     {% else %}
     <form method="POST" action="{{ url_for('my_plan_add') }}" class="d-inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="slug" value="{{ program.slug }}">
       <button type="submit" class="btn btn-sm btn-outline-success">
         <i class="bi bi-plus me-1"></i>Add to My Plan
@@ -28,6 +29,7 @@
       <i class="bi bi-clipboard-check me-1"></i>Full Audit
     </a>
     <form method="POST" action="{{ url_for('reset', slug=program.slug) }}" class="d-inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn btn-outline-danger btn-sm"
               onclick="return confirm('Reset all progress?')">
         <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
@@ -147,6 +149,7 @@
     <div class="card-body">
       <form method="POST" action="{{ url_for('add_course', slug=program.slug) }}"
             class="d-flex gap-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="text" name="course_code" id="course-search"
                class="form-control form-control-sm" placeholder="e.g. PHIL 201"
                autocomplete="off">
@@ -245,7 +248,10 @@ document.querySelectorAll('.auto-save-checkbox').forEach(cb => {
     try {
       await fetch('/api/toggle-course', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]').content,
+        },
         body: JSON.stringify({code: this.value, checked: this.checked}),
       });
       saveStatus.textContent = 'Saved ✓';
