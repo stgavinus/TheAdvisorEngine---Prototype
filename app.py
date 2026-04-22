@@ -231,6 +231,74 @@ def _get_planned_section_objects(uid: str, term_code: str) -> list[dict]:
     return result
 
 
+def _plan_context(uid: str, eligible: list[dict]) -> dict:
+    """Return a dict with all upcoming-semester plan data.
+
+    Keys:
+      plan_courses     — list of {code, title, credits}
+      planned_sections — list of scheduled section objects for the current term
+      current_term     — term code string
+      current_term_name — human-readable term name
+
+    plan_courses credit/title priority:
+      1. actual scheduled section units
+      2. eligible-list (program-aware)
+      3. raw catalog node
+    """
+    terms             = _get_schedule_terms()
+    current_term      = terms[0]["code"] if terms else ""
+    current_term_name = terms[0]["name"] if terms else ""
+    planned_sections  = _get_planned_section_objects(uid, current_term) if current_term else []
+
+    for sec in planned_sections:
+        user_db.add_plan_course(uid, sec["course_code"])
+
+    plan_course_codes = user_db.get_plan_courses(uid)
+
+    # Deduplicate: if both "MUS 325" and "MUS 325 / MUS 324H" are in the plan,
+    # keep only the slash-code and drop the plain component.
+    part_to_slash = {}
+    for code in plan_course_codes:
+        parts = [p.strip() for p in code.split("/")]
+        if len(parts) > 1:
+            for part in parts:
+                part_to_slash[part] = code
+    plan_course_codes = [c for c in plan_course_codes if c not in part_to_slash]
+
+    eligible_lookup   = {c["code"]: c for c in eligible}
+    section_units     = {s["course_code"]: s["units"] for s in planned_sections if s.get("units")}
+
+    slash_node = _SLASH_NODE
+    slash_eligible: dict = {}
+    for cat_code, info in eligible_lookup.items():
+        for part in cat_code.split("/"):
+            part = part.strip()
+            if part not in slash_eligible or not slash_eligible[part].get("credits"):
+                slash_eligible[part] = info
+
+    plan_courses = []
+    for code in plan_course_codes:
+        node = engine.courses.get(code) or slash_node.get(code)
+        info = eligible_lookup.get(code) or slash_eligible.get(code)
+        credits = (
+            section_units.get(code)
+            or (info or {}).get("credits")
+            or (node.credits if node else "")
+        )
+        plan_courses.append({
+            "code":    code,
+            "title":   (info or {}).get("title") or (node.title if node else ""),
+            "credits": credits,
+        })
+
+    return {
+        "plan_courses":      plan_courses,
+        "planned_sections":  planned_sections,
+        "current_term":      current_term,
+        "current_term_name": current_term_name,
+    }
+
+
 def _completed() -> set:
     return user_db.get_completed(g.user_id)
 
@@ -336,47 +404,12 @@ def my_plan():
     ] if program_slugs else []
 
     # Upcoming semester plan
-    terms             = _get_schedule_terms()
-    current_term      = terms[0]["code"] if terms else ""
-    current_term_name = terms[0]["name"] if terms else ""
-    planned_sections  = _get_planned_section_objects(g.user_id, current_term) if current_term else []
-
-    # Backfill plan from any already-scheduled sections (idempotent INSERT OR IGNORE)
-    for sec in planned_sections:
-        user_db.add_plan_course(g.user_id, sec["course_code"])
-
-    plan_course_codes = user_db.get_plan_courses(g.user_id)
-
-    # Build an info dict (title, credits) for each plan course.
-    # Use section units (from schedule DB) as the authoritative credit count —
-    # catalog credits can differ from actual enrolled units (e.g. variable-credit courses).
-    eligible_lookup  = {c["code"]: c for c in eligible}
-    section_units    = {s["course_code"]: s["units"] for s in planned_sections if s.get("units")}
-
-    # Build slash-reverse lookups so PeopleSoft codes like "TRS 202B" can resolve
-    # catalog entries stored as slash-separated codes like "TRS 202A / TRS 202B".
-    slash_node = _SLASH_NODE
-    slash_eligible = {}
-    for cat_code, info in eligible_lookup.items():
-        for part in cat_code.split('/'):
-            part = part.strip()
-            if part not in slash_eligible or not slash_eligible[part].get("credits"):
-                slash_eligible[part] = info
-
-    plan_courses = []
-    for code in plan_course_codes:
-        node = engine.courses.get(code) or slash_node.get(code)
-        info = eligible_lookup.get(code) or slash_eligible.get(code)
-        credits = (
-            section_units.get(code)
-            or (info or {}).get("credits")
-            or (node.credits if node else "")
-        )
-        plan_courses.append({
-            "code":    code,
-            "title":   (info or {}).get("title") or (node.title if node else ""),
-            "credits": credits,
-        })
+    plan_ctx          = _plan_context(g.user_id, eligible)
+    plan_courses      = plan_ctx["plan_courses"]
+    planned_sections  = plan_ctx["planned_sections"]
+    current_term      = plan_ctx["current_term"]
+    current_term_name = plan_ctx["current_term_name"]
+    plan_course_codes = [c["code"] for c in plan_courses]
 
     return render_template("my_plan.html",
         programs=programs_data,
@@ -467,6 +500,8 @@ def advisor(slug):
     eligible = engine.eligible_courses(completed, slug)
     audit    = engine.degree_audit(completed, slug)
 
+    plan_courses = _plan_context(g.user_id, eligible)["plan_courses"]
+
     return render_template("advisor.html",
         program=prog,
         blocks=blocks,
@@ -476,7 +511,7 @@ def advisor(slug):
         in_plan=in_plan,
         catalog_url=catalog_url,
         outside_courses=outside_courses,
-        plan_courses=user_db.get_plan_courses(g.user_id),
+        plan_courses=plan_courses,
     )
 
 

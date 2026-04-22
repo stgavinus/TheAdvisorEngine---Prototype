@@ -296,9 +296,12 @@ const planCourses = new Map();   // code → {title, credits}
 {
   const eligibleLookup = {};
   {{ eligible | tojson }}.forEach(c => { eligibleLookup[c.code] = c; });
-  {{ plan_courses | tojson }}.forEach(code => {
-    const info = eligibleLookup[code] || {};
-    planCourses.set(code, { title: info.title || '', credits: info.credits || '' });
+  {{ plan_courses | tojson }}.forEach(c => {
+    const info = eligibleLookup[c.code] || {};
+    planCourses.set(c.code, {
+      title:   info.title   || c.title   || '',
+      credits: info.credits || c.credits || '',
+    });
   });
 }
 const planListEl  = document.getElementById('plan-list');
@@ -385,6 +388,7 @@ document.addEventListener('click', async e => {
 });
 
 syncAddButtons();
+renderPlan();
 
 // ── Auto-save checkboxes ──────────────────────────────────────────────────────
 const saveStatus = document.getElementById('save-status');
