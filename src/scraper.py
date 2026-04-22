@@ -38,6 +38,15 @@ def _extract_course_from_row(tds: list[Tag]) -> Course | None:
     title    = tds[1].get_text(separator=" ", strip=True)
     credits  = tds[-1].get_text(strip=True) if len(tds) > 2 else ""
 
+    # Deduplicate slash-separated components (e.g. "GER 101 / GER 101" → "GER 101")
+    parts = [p.strip() for p in raw_code.split("/") if p.strip()]
+    seen: list[str] = []
+    for p in parts:
+        if p not in seen:
+            seen.append(p)
+    if len(seen) != len(parts):
+        raw_code = " / ".join(seen)
+
     # Skip header rows
     if any(k in raw_code.lower() for k in ("subject", "course", "number")):
         return None

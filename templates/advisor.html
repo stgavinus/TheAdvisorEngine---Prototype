@@ -25,6 +25,9 @@
       </button>
     </form>
     {% endif %}
+    <a href="{{ catalog_url }}" target="_blank" rel="noopener" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-box-arrow-up-right me-1"></i>Catalog
+    </a>
     <a href="{{ url_for('audit', slug=program.slug) }}" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-clipboard-check me-1"></i>Full Audit
     </a>
@@ -42,14 +45,14 @@
 <div class="mb-4">
   <div class="d-flex justify-content-between small text-muted mb-1">
     <span>Overall completion</span>
-    <span>{{ audit.completion_pct }}%
+    <span id="completion-pct">{{ audit.completion_pct }}%
       {% if audit.graduation_eligible %}
-        <span class="badge bg-success ms-1">Graduation Eligible</span>
+        <span class="badge bg-success ms-1" id="grad-badge">Graduation Eligible</span>
       {% endif %}
     </span>
   </div>
   <div class="progress" style="height:10px">
-    <div class="progress-bar bg-success" style="width:{{ audit.completion_pct }}%"></div>
+    <div class="progress-bar bg-success" id="completion-bar" style="width:{{ audit.completion_pct }}%"></div>
   </div>
 </div>
 
@@ -75,7 +78,8 @@
               <span class="badge bg-light text-muted border ms-2" style="font-size:.7rem">—</span>
               {% else %}
               <span class="badge {% if block.done > 0 %}bg-success{% else %}bg-secondary{% endif %} ms-2"
-                    style="font-size:.7rem">
+                    style="font-size:.7rem"
+                    data-block-badge="{{ loop.index }}">
                 {{ block.done }}/{{ block.total }}
               </span>
               {% endif %}
@@ -109,15 +113,18 @@
                   <span class="d-flex align-items-center gap-2 flex-shrink-0 ms-2">
                     <span class="text-muted" style="white-space:nowrap">{{ course.credits }} cr</span>
                     {% if not is_done and not is_eligible %}
-                    <button type="button"
-                            class="btn btn-link p-0 why-btn text-warning"
-                            style="font-size:.75rem;line-height:1;text-decoration:none"
-                            data-code="{{ course.code }}"
-                            data-title="{{ course.title }}"
-                            data-credits="{{ course.credits }}"
-                            data-target="why-{{ course.code | replace(' ', '-') | replace('/', '-') }}">
-                      <i class="bi bi-question-circle"></i>
-                    </button>
+                    <span onclick="event.preventDefault();event.stopPropagation()"
+                          class="d-inline-flex">
+                      <button type="button"
+                              class="btn btn-link p-0 why-btn text-warning"
+                              style="font-size:.75rem;line-height:1;text-decoration:none"
+                              data-code="{{ course.code }}"
+                              data-title="{{ course.title }}"
+                              data-credits="{{ course.credits }}"
+                              data-target="why-{{ course.code | replace(' ', '-') | replace('/', '-') }}">
+                        <i class="bi bi-question-circle"></i>
+                      </button>
+                    </span>
                     {% endif %}
                   </span>
                 </label>
@@ -134,6 +141,46 @@
         </div>
       </div>
       {% endfor %}
+
+      {% if outside_courses %}
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button py-2" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#block-outside">
+            <div class="d-flex justify-content-between w-100 me-3 align-items-center">
+              <span class="small fw-semibold">Outside Courses</span>
+              <span class="badge bg-success ms-2" style="font-size:.7rem">
+                {{ outside_courses | length }}
+              </span>
+            </div>
+          </button>
+        </h2>
+        <div id="block-outside" class="accordion-collapse collapse show">
+          <div class="accordion-body py-2 px-3">
+            <p class="text-muted small fst-italic mb-2">Courses you've completed outside this program.</p>
+            {% for course in outside_courses %}
+            <div class="form-check py-1 border-bottom">
+              <input class="form-check-input auto-save-checkbox" type="checkbox"
+                     value="{{ course.code }}"
+                     id="c-out-{{ course.code | replace(' ', '-') | replace('/', '-') }}"
+                     checked>
+              <label class="form-check-label d-flex justify-content-between align-items-center small"
+                     for="c-out-{{ course.code | replace(' ', '-') | replace('/', '-') }}">
+                <span>
+                  <a href="{{ url_for('course_detail', code=course.code) }}"
+                     class="text-decoration-none fw-semibold">{{ course.code }}</a>
+                  {% if course.title %}
+                  <span class="text-muted ms-1">{{ course.title[:45] }}{% if course.title|length > 45 %}…{% endif %}</span>
+                  {% endif %}
+                </span>
+                <span class="text-muted flex-shrink-0 ms-2" style="white-space:nowrap">{{ course.credits }} cr</span>
+              </label>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
     </div>
 
     <div class="card-footer d-flex gap-2 align-items-center">
@@ -171,7 +218,7 @@
       <span class="fw-semibold">
         <i class="bi bi-arrow-right-circle text-success me-1"></i>What You Can Take Now
       </span>
-      <span class="badge bg-success ms-auto">{{ eligible | length }} courses</span>
+      <span class="badge bg-success ms-auto" id="eligible-count">{{ eligible | length }} courses</span>
       <span class="badge bg-light text-dark border" style="font-size:.65rem">Modus Ponens</span>
     </div>
     <div class="card-body p-0">
@@ -183,7 +230,7 @@
               <th>Course</th><th>Title</th><th class="text-end">Credits</th><th></th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="eligible-tbody">
             {% for c in eligible %}
             <tr>
               <td>
@@ -226,10 +273,6 @@
       Click <i class="bi bi-plus"></i> next to a course above to add it to your semester.
     </div>
     <div id="plan-list"></div>
-    <div id="plan-warning" class="d-none alert alert-danger mx-3 mb-3 py-2 small mt-2">
-      <i class="bi bi-exclamation-triangle-fill me-1"></i>
-      You are over the {{ "21" }}-credit limit. Please remove a course.
-    </div>
   </div>
 
 </div>
@@ -238,9 +281,164 @@
 
 {% block extra_scripts %}
 <script>
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ── Semester plan management ──────────────────────────────────────────────────
+const CSRF        = document.querySelector('meta[name="csrf-token"]').content;
+const planCourses = new Map();   // code → {title, credits}
+
+// Seed from server — build a lookup of eligible courses for title/credits
+{
+  const eligibleLookup = {};
+  {{ eligible | tojson }}.forEach(c => { eligibleLookup[c.code] = c; });
+  {{ plan_courses | tojson }}.forEach(code => {
+    const info = eligibleLookup[code] || {};
+    planCourses.set(code, { title: info.title || '', credits: info.credits || '' });
+  });
+}
+const planListEl  = document.getElementById('plan-list');
+const planEmptyEl = document.getElementById('plan-empty');
+const planCredEl  = document.getElementById('plan-credits');
+
+function renderPlan() {
+  const entries = [...planCourses.entries()];
+  planEmptyEl.classList.toggle('d-none', entries.length > 0);
+
+  let totalCr = 0;
+  planListEl.innerHTML = entries.map(([code, c]) => {
+    totalCr += parseFloat(c.credits) || 0;
+    return `
+      <div class="d-flex align-items-center justify-content-between px-3 py-2 border-top small">
+        <span>
+          <span class="fw-semibold">${escHtml(code)}</span>
+          ${c.title ? `<span class="text-muted ms-1">${escHtml(c.title)}</span>` : ''}
+        </span>
+        <span class="d-flex align-items-center gap-2 flex-shrink-0">
+          ${c.credits ? `<span class="text-muted">${escHtml(c.credits)} cr</span>` : ''}
+          <button type="button" class="btn btn-sm btn-outline-danger py-0 remove-from-plan-btn"
+                  data-code="${escHtml(code)}">
+            <i class="bi bi-x"></i>
+          </button>
+        </span>
+      </div>`;
+  }).join('');
+
+  planCredEl.textContent = totalCr + ' cr';
+
+  planListEl.querySelectorAll('.remove-from-plan-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const code = btn.dataset.code;
+      planCourses.delete(code);
+      renderPlan();
+      syncAddButtons();
+      await fetch('/api/plan/courses', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF},
+        body: JSON.stringify({code, action: 'remove'}),
+      });
+    });
+  });
+}
+
+function syncAddButtons() {
+  document.querySelectorAll('.add-to-plan-btn').forEach(btn => {
+    const code = btn.dataset.code;
+    if (!code) return;
+    if (planCourses.has(code)) {
+      btn.className = 'btn btn-sm btn-success py-0 add-to-plan-btn';
+      btn.innerHTML = '<i class="bi bi-check"></i>';
+    } else {
+      btn.className = 'btn btn-sm btn-outline-primary py-0 add-to-plan-btn';
+      btn.innerHTML = '<i class="bi bi-plus"></i>';
+    }
+  });
+}
+
+// Single delegated listener handles both eligible-table and why-blocked buttons
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('.add-to-plan-btn');
+  if (!btn) return;
+  const code    = btn.dataset.code;
+  const title   = btn.dataset.title || '';
+  const credits = btn.dataset.credits || '';
+  if (!code) return;
+
+  const action = planCourses.has(code) ? 'remove' : 'add';
+  if (action === 'remove') {
+    planCourses.delete(code);
+  } else {
+    planCourses.set(code, {title, credits});
+  }
+  renderPlan();
+  syncAddButtons();
+
+  await fetch('/api/plan/courses', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF},
+    body: JSON.stringify({code, action}),
+  });
+});
+
+syncAddButtons();
+
 // ── Auto-save checkboxes ──────────────────────────────────────────────────────
-let reloadTimer;
 const saveStatus = document.getElementById('save-status');
+const SLUG = {{ program.slug | tojson }};
+
+async function refreshAdvisorState() {
+  const res  = await fetch(`/api/advisor-state/${encodeURIComponent(SLUG)}`);
+  const data = await res.json();
+
+  // Update progress bar
+  document.getElementById('completion-bar').style.width = data.completion_pct + '%';
+  const pctEl = document.getElementById('completion-pct');
+  pctEl.childNodes[0].textContent = data.completion_pct + '%\n      ';
+  let gradBadge = document.getElementById('grad-badge');
+  if (data.graduation_eligible && !gradBadge) {
+    gradBadge = document.createElement('span');
+    gradBadge.id = 'grad-badge';
+    gradBadge.className = 'badge bg-success ms-1';
+    gradBadge.textContent = 'Graduation Eligible';
+    pctEl.appendChild(gradBadge);
+  } else if (!data.graduation_eligible && gradBadge) {
+    gradBadge.remove();
+  }
+
+  // Update block badges
+  data.blocks.forEach((b, i) => {
+    const badge = document.querySelector(`[data-block-badge="${i + 1}"]`);
+    if (badge) {
+      badge.textContent = `${b.done}/${b.total}`;
+      badge.className = `badge ms-2 ${b.done > 0 ? 'bg-success' : 'bg-secondary'}`;
+    }
+  });
+
+  // Update eligible table
+  const tbody = document.getElementById('eligible-tbody');
+  const countBadge = document.getElementById('eligible-count');
+  if (tbody) {
+    tbody.innerHTML = data.eligible.map(c => `
+      <tr>
+        <td><a href="/course/${encodeURIComponent(c.code)}" class="fw-semibold text-decoration-none">${escHtml(c.code)}</a></td>
+        <td class="text-muted small">${escHtml(c.title)}</td>
+        <td class="text-end text-muted small">${escHtml(c.credits)}</td>
+        <td class="text-end">
+          <button type="button" class="btn btn-sm btn-outline-primary py-0 add-to-plan-btn"
+                  data-code="${escHtml(c.code)}" data-title="${escHtml(c.title)}" data-credits="${escHtml(c.credits)}">
+            <i class="bi bi-plus"></i>
+          </button>
+        </td>
+      </tr>
+    `).join('');
+    syncAddButtons();
+  }
+  if (countBadge) countBadge.textContent = data.eligible.length + ' courses';
+}
 
 document.querySelectorAll('.auto-save-checkbox').forEach(cb => {
   cb.addEventListener('change', async function() {
@@ -255,11 +453,10 @@ document.querySelectorAll('.auto-save-checkbox').forEach(cb => {
         body: JSON.stringify({code: this.value, checked: this.checked}),
       });
       saveStatus.textContent = 'Saved ✓';
+      await refreshAdvisorState();
     } catch(e) {
       saveStatus.textContent = 'Error saving';
     }
-    clearTimeout(reloadTimer);
-    reloadTimer = setTimeout(() => window.location.reload(), 1200);
   });
 });
 
@@ -279,7 +476,10 @@ searchInput.addEventListener('input', async function() {
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'list-group-item list-group-item-action py-1 small';
-    item.innerHTML = `<strong>${course.code}</strong> — ${course.title}`;
+    const strong = document.createElement('strong');
+    strong.textContent = course.code;
+    item.appendChild(strong);
+    item.appendChild(document.createTextNode(' — ' + course.title));
     item.addEventListener('click', () => {
       searchInput.value = course.code;
       suggestionsBox.innerHTML = '';
@@ -294,8 +494,8 @@ document.addEventListener('click', e => {
 
 // ── Inline Why Blocked ────────────────────────────────────────────────────────
 function renderCourseRef(c) {
-  if (typeof c === 'string') return `<strong>${c}</strong>`;
-  return `<strong>${c.code}</strong>${c.title ? ' — ' + c.title : ''}`;
+  if (typeof c === 'string') return `<strong>${escHtml(c)}</strong>`;
+  return `<strong>${escHtml(c.code)}</strong>${c.title ? ' — ' + escHtml(c.title) : ''}`;
 }
 
 function renderBlockedResult(data, code, title, credits) {

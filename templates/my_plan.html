@@ -123,12 +123,13 @@
               <td class="text-muted small">{{ c.title }}</td>
               <td class="text-end text-muted small">{{ c.credits }}</td>
               <td class="text-end">
+                {% set in_plan = c.code in plan_course_codes %}
                 <button type="button"
-                        class="btn btn-sm btn-outline-primary py-0 add-to-plan-btn"
+                        class="btn btn-sm py-0 add-to-plan-btn {% if in_plan %}btn-success{% else %}btn-outline-primary{% endif %}"
                         data-code="{{ c.code }}"
                         data-title="{{ c.title }}"
                         data-credits="{{ c.credits }}">
-                  <i class="bi bi-plus"></i>
+                  <i class="bi {% if in_plan %}bi-check{% else %}bi-plus{% endif %}"></i>
                 </button>
               </td>
             </tr>
@@ -152,19 +153,54 @@
       <span class="fw-semibold">
         <i class="bi bi-calendar-plus me-2"></i>My Upcoming Semester
       </span>
+      {% if current_term_name %}
+      <span class="text-muted small ms-1">{{ current_term_name }}</span>
+      {% endif %}
       <span class="badge bg-secondary ms-auto" id="plan-credits">0 cr</span>
     </div>
-    <div id="plan-empty" class="text-muted small p-3">
-      Click <i class="bi bi-plus"></i> next to a course to add it to your semester.
+
+    <div id="plan-empty" class="text-muted small p-3{% if plan_courses %} d-none{% endif %}">
+      Click <i class="bi bi-plus"></i> next to a course above to add it to your semester.
     </div>
-    <div id="plan-list"></div>
-    <div id="plan-warning" class="d-none alert alert-danger mx-3 mb-3 py-2 small mt-2">
-      <i class="bi bi-exclamation-triangle-fill me-1"></i>
-      You are over the 21-credit limit. Please remove a course.
+    {% set scheduled_codes = planned_sections | map(attribute='course_code') | list %}
+    <div id="plan-list">
+      {% for c in plan_courses %}
+        {% set sec = planned_sections | selectattr('course_code', 'equalto', c.code) | first | default(none) %}
+        <div class="d-flex align-items-center gap-2 px-3 py-2 border-top small plan-row"
+             data-code="{{ c.code }}" data-credits="{{ c.credits }}">
+          <div class="flex-grow-1" style="min-width:0">
+            <a href="{{ url_for('course_detail', code=c.code) }}"
+               class="fw-semibold text-decoration-none {% if sec %}text-primary{% else %}text-secondary{% endif %}">
+              {{ c.code }}
+            </a>
+            {% if c.title %}<span class="text-muted ms-1">{{ c.title[:40] }}</span>{% endif %}
+            {% if sec %}
+              <span class="text-muted ms-1 fw-normal">· {{ sec.section_number }}</span>
+              {% if sec.meetings %}
+              {% set mtg = sec.meetings[0] %}
+              <div class="text-muted" style="font-size:.7rem">
+                {{ mtg.days or 'TBA' }}{% if mtg.start_time %} {{ mtg.start_time }}–{{ mtg.end_time }}{% endif %}{% if mtg.room %} · {{ mtg.room }}{% endif %}
+              </div>
+              {% endif %}
+            {% else %}
+              <div class="text-muted" style="font-size:.7rem">
+                No section scheduled ·
+                <a href="{{ url_for('schedule') }}" class="text-decoration-none">Go to schedule</a>
+              </div>
+            {% endif %}
+          </div>
+          {% if c.credits %}<span class="text-muted flex-shrink-0">{{ c.credits }} cr</span>{% endif %}
+          <button class="btn btn-sm btn-outline-danger py-0 px-1 flex-shrink-0 remove-plan-btn"
+                  data-code="{{ c.code }}">
+            <i class="bi bi-x"></i>
+          </button>
+        </div>
+      {% endfor %}
     </div>
+
     <div class="card-footer">
       <div class="text-muted" style="font-size:.7rem">
-        Plan is saved in your browser. Maximum 21 credits per semester without special permission.
+        Plan is auto-saved.
       </div>
     </div>
   </div>
@@ -187,6 +223,173 @@
 
 {% block extra_scripts %}
 <script>
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const CSRF         = document.querySelector('meta[name="csrf-token"]').content;
+const CURRENT_TERM = {{ current_term | tojson }};
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Semester plan management ──────────────────────────────────────────────────
+
+function updatePlanCredits() {
+  let total = 0;
+  document.querySelectorAll('#plan-list .plan-row[data-credits]').forEach(row => {
+    total += parseFloat(row.dataset.credits) || 0;
+  });
+  const el = document.getElementById('plan-credits');
+  if (el) el.textContent = total + ' cr';
+}
+updatePlanCredits();
+
+function updatePlanEmpty() {
+  const list  = document.getElementById('plan-list');
+  const empty = document.getElementById('plan-empty');
+  if (!list || !empty) return;
+  empty.classList.toggle('d-none', list.querySelectorAll('.plan-row').length > 0);
+}
+
+function syncAddButton(code, inPlan) {
+  document.querySelectorAll(`.add-to-plan-btn[data-code="${CSS.escape(code)}"]`).forEach(btn => {
+    if (inPlan) {
+      btn.className = 'btn btn-sm py-0 add-to-plan-btn btn-success';
+      btn.querySelector('i').className = 'bi bi-check';
+    } else {
+      btn.className = 'btn btn-sm py-0 add-to-plan-btn btn-outline-primary';
+      btn.querySelector('i').className = 'bi bi-plus';
+    }
+  });
+}
+
+// sec is an optional planned-section object {section_number, meetings:[{days,start_time,end_time,room}]}
+function appendPlanRow(code, title, credits, sec) {
+  const list = document.getElementById('plan-list');
+  if (!list) return;
+  if (list.querySelector(`.plan-row[data-code="${CSS.escape(code)}"]`)) return;
+  const row = document.createElement('div');
+  row.className = 'd-flex align-items-center gap-2 px-3 py-2 border-top small plan-row';
+  row.dataset.code    = code;
+  row.dataset.credits = credits || '';
+
+  let schedInfo = '';
+  if (sec) {
+    schedInfo = `<span class="text-muted ms-1 fw-normal">· ${escHtml(sec.section_number || '')}</span>`;
+    const mtg = (sec.meetings || [])[0];
+    if (mtg) {
+      schedInfo +=
+        `<div class="text-muted" style="font-size:.7rem">` +
+        escHtml(mtg.days || 'TBA') +
+        (mtg.start_time ? ' ' + escHtml(mtg.start_time) + '–' + escHtml(mtg.end_time) : '') +
+        (mtg.room ? ' · ' + escHtml(mtg.room) : '') +
+        `</div>`;
+    }
+  } else {
+    schedInfo =
+      `<div class="text-muted" style="font-size:.7rem">No section scheduled · ` +
+      `<a href="/schedule" class="text-decoration-none">Go to schedule</a></div>`;
+  }
+
+  row.innerHTML =
+    `<div class="flex-grow-1" style="min-width:0">` +
+    `<a href="/course/${encodeURIComponent(code)}" class="fw-semibold text-decoration-none ${sec ? 'text-primary' : 'text-secondary'}">${escHtml(code)}</a>` +
+    (title ? `<span class="text-muted ms-1">${escHtml(title.substring(0, 40))}</span>` : '') +
+    schedInfo +
+    `</div>` +
+    (credits ? `<span class="text-muted flex-shrink-0">${escHtml(String(credits))} cr</span>` : '') +
+    `<button class="btn btn-sm btn-outline-danger py-0 px-1 flex-shrink-0 remove-plan-btn" data-code="${escHtml(code)}">` +
+    `<i class="bi bi-x"></i></button>`;
+  list.appendChild(row);
+}
+
+// On page load, pull current plan state from the server and add any courses/sections
+// that were added (e.g. via the Schedule page) since this page was last rendered.
+async function syncPlanFromServer() {
+  if (!CURRENT_TERM) return;
+  try {
+    const [planResp, secResp] = await Promise.all([
+      fetch('/api/plan/courses'),
+      fetch(`/api/schedule/planned?term=${encodeURIComponent(CURRENT_TERM)}`),
+    ]);
+    const planCourses = await planResp.json();  // [{code, credits}]
+    const sections    = await secResp.json();   // [{course_code, course_title, section_number, meetings, units}]
+
+    const domCodes   = new Set([...document.querySelectorAll('#plan-list .plan-row')].map(r => r.dataset.code));
+    const creditsMap = new Map(planCourses.map(c => [c.code, c.credits]));
+    const sectionMap = new Map(sections.map(s => [s.course_code, s]));
+
+    // All codes the server considers part of the plan
+    const allCodes = new Set([...planCourses.map(c => c.code), ...sections.map(s => s.course_code)]);
+
+    let changed = false;
+    for (const code of allCodes) {
+      if (domCodes.has(code)) continue;
+      const sec     = sectionMap.get(code);
+      const credits = sec?.units || creditsMap.get(code) || '';
+      const title   = sec?.course_title || '';
+      appendPlanRow(code, title, credits, sec);
+      changed = true;
+    }
+
+    if (changed) {
+      updatePlanEmpty();
+      updatePlanCredits();
+    }
+
+    // Sync add-button states to match server truth
+    for (const code of allCodes) {
+      syncAddButton(code, true);
+    }
+  } catch (e) {
+    // Network failure — silently ignore, server-rendered state is still shown
+  }
+}
+syncPlanFromServer();
+
+// + / ✓ button on eligible table
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('.add-to-plan-btn');
+  if (!btn) return;
+  const code    = btn.dataset.code;
+  const title   = btn.dataset.title || '';
+  const credits = btn.dataset.credits || '';
+  if (!code) return;
+  const adding = btn.classList.contains('btn-outline-primary');
+  await fetch('/api/plan/courses', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF},
+    body: JSON.stringify({code, action: adding ? 'add' : 'remove'}),
+  });
+  if (adding) {
+    appendPlanRow(code, title, credits);
+    syncAddButton(code, true);
+  } else {
+    const row = document.querySelector(`#plan-list .plan-row[data-code="${CSS.escape(code)}"]`);
+    if (row) row.remove();
+    syncAddButton(code, false);
+  }
+  updatePlanEmpty();
+  updatePlanCredits();
+});
+
+// × remove button on plan rows
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('.remove-plan-btn');
+  if (!btn) return;
+  const code = btn.dataset.code;
+  const row  = btn.closest('.plan-row');
+  await fetch('/api/plan/courses', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF},
+    body: JSON.stringify({code, action: 'remove'}),
+  });
+  if (row) row.remove();
+  syncAddButton(code, false);
+  updatePlanEmpty();
+  updatePlanCredits();
+});
+
+// ── Program search ────────────────────────────────────────────────────────────
 const searchInput = document.getElementById('program-search');
 const suggestions = document.getElementById('program-suggestions');
 const slugInput   = document.getElementById('add-slug');
@@ -207,7 +410,14 @@ if (searchInput) {
       const item = document.createElement('button');
       item.type = 'button';
       item.className = 'list-group-item list-group-item-action py-2 small';
-      item.innerHTML = `<strong>${p.name}</strong> <span class="text-muted ms-1">${p.category}</span>`;
+      const nameEl = document.createElement('strong');
+      nameEl.textContent = p.name;
+      const catEl = document.createElement('span');
+      catEl.className = 'text-muted ms-1';
+      catEl.textContent = p.category;
+      item.appendChild(nameEl);
+      item.appendChild(document.createTextNode(' '));
+      item.appendChild(catEl);
       item.addEventListener('click', () => {
         searchInput.value = p.name;
         slugInput.value   = p.slug;

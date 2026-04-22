@@ -1,0 +1,910 @@
+{% extends "base.html" %}
+{% block title %}Schedule Planner — The Advisor Engine{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+  <h2 class="fw-bold mb-0"><i class="bi bi-calendar-week me-2"></i>Schedule Planner</h2>
+  <div class="ms-auto d-flex align-items-center gap-2">
+    <label class="small text-muted mb-0">Term:</label>
+    <select id="termSelect" class="form-select form-select-sm" style="width:auto">
+      {% for t in terms %}
+      <option value="{{ t.code }}" {% if t.code == term_code %}selected{% endif %}>{{ t.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+
+<div class="row g-3">
+
+  {# ── Left panel ──────────────────────────────────────────────────────────── #}
+  <div class="col-lg-5 col-xl-4">
+    <div class="card shadow-sm" style="height:calc(100vh - 120px);display:flex;flex-direction:column">
+
+      {# Search bar #}
+      <div class="card-header p-2">
+        <div class="input-group input-group-sm">
+          <span class="input-group-text bg-transparent border-end-0"><i class="bi bi-search text-muted"></i></span>
+          <input type="search" id="courseSearch" class="form-control border-start-0 ps-0"
+                 placeholder="Search courses…" autocomplete="off">
+        </div>
+      </div>
+
+      {# View toggle (shown by JS when planned > 0 and not searching) #}
+      <div id="viewToggle" class="px-2 pt-2 d-none">
+        <div class="btn-group btn-group-sm w-100" role="group">
+          <button id="btnPrograms" class="btn btn-outline-secondary active" onclick="switchView('programs')">My Programs</button>
+          <button id="btnSemester" class="btn btn-outline-secondary"        onclick="switchView('semester')">My Upcoming Semester</button>
+        </div>
+      </div>
+
+      {# Scrollable content area #}
+      <div class="flex-grow-1 overflow-auto" style="min-height:0">
+
+        {# Search results #}
+        <div id="searchResults" class="d-none p-2 small"></div>
+
+        {# My Programs view #}
+        <div id="programsView">
+          {% if programs_data %}
+            {% if programs_data | length > 1 %}
+            <div class="px-2 pt-2">
+              <select id="programSelect" class="form-select form-select-sm" onchange="switchProgram(this.value)">
+                {% for p in programs_data %}
+                <option value="{{ loop.index0 }}">{{ p.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            {% endif %}
+
+            {% for prog in programs_data %}
+            <div class="program-blocks" data-prog="{{ loop.index0 }}" {% if not loop.first %}style="display:none"{% endif %}>
+              <div class="accordion accordion-flush" id="sched-accordion-{{ loop.index0 }}">
+                {% for block in prog.blocks %}
+                <div class="accordion-item">
+                  <h2 class="accordion-header">
+                    <button class="accordion-button collapsed py-2 small" type="button"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#sb-{{ loop.index0 }}-{{ loop.index }}">
+                      <span class="flex-grow-1 fw-semibold" style="font-size:.8rem">{{ block.title }}</span>
+                      <span class="badge bg-secondary rounded-pill me-2" style="font-size:.65rem">{{ block.courses | length }}</span>
+                    </button>
+                  </h2>
+                  <div id="sb-{{ loop.index0 }}-{{ loop.index }}" class="accordion-collapse collapse">
+                    <div class="accordion-body p-0">
+                      {% for c in block.courses %}
+                      <div class="course-row d-flex align-items-center gap-2 px-3 py-1"
+                           style="border-bottom:1px solid var(--bs-border-color-translucent)"
+                           data-code="{{ c.code }}" data-credits="{{ c.credits or 0 }}"
+                           onmouseenter="onCourseRowEnter('{{ c.code }}')"
+                           onmouseleave="onCourseRowLeave()">
+                        <div class="flex-grow-1" style="min-width:0">
+                          <div class="fw-semibold {% if c.offered %}text-primary{% else %}text-muted{% endif %}" style="font-size:.8rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.code }}</div>
+                          {% if c.title %}<div class="text-muted" style="font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.title[:42] }}</div>{% endif %}
+                          {% if c.prereqs %}<div class="text-muted" style="font-size:.63rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="{{ c.prereqs }}"><i class="bi bi-lock" style="font-size:.6rem"></i> {{ c.prereqs }}</div>{% endif %}
+                        </div>
+                        <span class="text-muted flex-shrink-0" style="font-size:.75rem">{{ c.credits or '' }}{% if c.credits %} cr{% endif %}</span>
+                        {% if c.offered %}
+                          <button class="btn btn-sm btn-outline-primary py-0 px-1 flex-shrink-0 section-toggle-btn"
+                                  onclick="handleToggle(this,'{{ c.code }}')" title="View sections">
+                            <i class="bi bi-plus-lg"></i>
+                          </button>
+                        {% else %}
+                          <span class="text-muted flex-shrink-0" style="font-size:.62rem;white-space:nowrap;font-style:italic">{{ c.when_offered }}</span>
+                        {% endif %}
+                      </div>
+                      <div id="ip-{{ c.code | replace(' ','_') | replace('/','_') }}" class="inline-picker d-none"></div>
+                      {% endfor %}
+                    </div>
+                  </div>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+            {% endfor %}
+
+          {% else %}
+          <div class="p-3 text-muted small">
+            {% if not terms %}Schedule data not yet available.
+            {% else %}No programs added. <a href="{{ url_for('my_plan') }}">Add one on My Plan</a>.{% endif %}
+          </div>
+          {% endif %}
+        </div>
+
+        {# My Upcoming Semester view #}
+        <div id="semesterView" class="d-none p-2 small">
+          <div id="semesterList"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  {# ── Calendar ────────────────────────────────────────────────────────────── #}
+  <div class="col-lg-7 col-xl-8">
+    <div class="card shadow-sm">
+      <div class="card-header d-flex align-items-center justify-content-between py-2">
+        <span class="fw-semibold small" id="calendarTitle">{{ term_name }}</span>
+        <span class="small text-muted" id="creditCount"></span>
+      </div>
+      <div class="card-body p-2" id="calendarWrap" style="overflow-x:auto"></div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const TERM_CODE  = {{ term_code | tojson }};
+const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escJs(s) {
+  return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}
+
+const CAL_START  = 7 * 60;
+const CAL_END    = 22 * 60;
+const PX_PER_MIN = 1.0;
+const TIME_W     = 48;
+
+function parseTime(str) {
+  if (!str) return null;
+  const m = str.match(/^(\d+):(\d+)(AM|PM)$/i);
+  if (!m) return null;
+  let h = parseInt(m[1]), min = parseInt(m[2]), period = m[3].toUpperCase();
+  if (period === 'PM' && h !== 12) h += 12;
+  if (period === 'AM' && h === 12) h = 0;
+  return h * 60 + min;
+}
+
+function parseDays(str) {
+  if (!str) return [];
+  const map = {Mo:0, Tu:1, We:2, Th:3, Fr:4, Sa:5};
+  return (str.match(/Mo|Tu|We|Th|Fr|Sa/g) || []).filter(d => d in map).map(d => map[d]);
+}
+
+function fmtTime(str) {
+  if (!str) return '';
+  return str.replace(':00','').replace('AM','am').replace('PM','pm');
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+let planned          = {{ planned | tojson }};
+// plan_courses is [{code, credits}] — keyed by course code for O(1) lookup
+let planCreditsMap   = new Map({{ plan_courses | tojson }}.map(c => [c.code, parseFloat(c.credits) || 0]));
+let planCourseCodes  = new Set(planCreditsMap.keys());
+let termCode         = TERM_CODE;
+let currentView      = 'programs';
+
+// Ghost preview state (updated by renderCalendar so showGhost can reuse layout)
+let currentShowDays = [0,1,2,3,4];
+let currentColW     = 80;
+// Map of ghost-id → {meetings, code} for hover preview
+const ghostMap = new Map();
+let ghostIdx   = 0;
+
+// ── Calendar ──────────────────────────────────────────────────────────────────
+
+const DAYS   = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const COLORS = ['#2e7d32','#1565c0','#6a1b9a','#e65100','#00695c','#37474f','#ad1457','#4e342e','#283593','#558b2f'];
+const colorMap = {};
+let colorIdx = 0;
+
+function renderCalendar() {
+  const wrap = document.getElementById('calendarWrap');
+  const availW = wrap.clientWidth - 8; // minus padding
+
+  const usedDays = new Set();
+  for (const sec of planned)
+    for (const mtg of sec.meetings)
+      for (const d of parseDays(mtg.days)) usedDays.add(d);
+
+  const showDays = [0,1,2,3,4];
+  if (usedDays.has(5)) showDays.push(5);
+
+  // Columns fill available width, minimum 80px each
+  const colW     = Math.max(Math.floor((availW - TIME_W) / showDays.length), 80);
+  currentShowDays = showDays;
+  currentColW     = colW;
+  const gridW    = TIME_W + showDays.length * colW;
+  const totalPx  = (CAL_END - CAL_START) * PX_PER_MIN;
+
+  // Conflict detection
+  const dayIntervals = {};
+  for (const sec of planned) {
+    for (const mtg of sec.meetings) {
+      const s = parseTime(mtg.start_time), e = parseTime(mtg.end_time);
+      if (s === null || e === null) continue;
+      for (const d of parseDays(mtg.days))
+        (dayIntervals[d] = dayIntervals[d] || []).push({start:s, end:e, cn: sec.class_number});
+    }
+  }
+  const conflictSet = new Set();
+  for (const intervals of Object.values(dayIntervals))
+    for (let i = 0; i < intervals.length; i++)
+      for (let j = i+1; j < intervals.length; j++)
+        if (intervals[i].start < intervals[j].end && intervals[j].start < intervals[i].end) {
+          conflictSet.add(intervals[i].cn); conflictSet.add(intervals[j].cn);
+        }
+
+  let html = `<div class="cal-grid" style="position:relative;width:${gridW}px;height:${totalPx}px">`;
+
+  // Hour lines + labels
+  for (let min = CAL_START; min <= CAL_END; min += 60) {
+    const y = (min - CAL_START) * PX_PER_MIN;
+    const h = min / 60;
+    const label = min === CAL_START ? '' : `${h > 12 ? h-12 : h}${h >= 12 ? 'pm' : 'am'}`;
+    html += `<div class="cal-hour-line" style="top:${y}px;left:${TIME_W}px;width:${gridW-TIME_W}px"></div>`;
+    if (label) html += `<div class="cal-time-label" style="top:${y-8}px;width:${TIME_W-4}px">${label}</div>`;
+  }
+
+  // Day headers
+  for (let i = 0; i < showDays.length; i++) {
+    const x = TIME_W + i * colW;
+    html += `<div class="cal-day-header" style="left:${x}px;width:${colW}px">${DAYS[showDays[i]]}</div>`;
+  }
+
+  // Section blocks
+  for (const sec of planned) {
+    if (!(sec.course_code in colorMap))
+      colorMap[sec.course_code] = COLORS[colorIdx++ % COLORS.length];
+    const color    = colorMap[sec.course_code];
+    const conflict = conflictSet.has(sec.class_number);
+    for (const mtg of sec.meetings) {
+      const s = parseTime(mtg.start_time), e = parseTime(mtg.end_time);
+      if (s === null || e === null) continue;
+      const top    = (s - CAL_START) * PX_PER_MIN;
+      const height = Math.max((e - s) * PX_PER_MIN, 18);
+      for (const d of parseDays(mtg.days)) {
+        const di = showDays.indexOf(d);
+        if (di < 0) continue;
+        const x  = TIME_W + di * colW + 2;
+        const bg = conflict ? '#b71c1c' : color;
+        html += `
+          <div class="cal-block" style="top:${top}px;left:${x}px;height:${height}px;width:${colW-4}px;background:${bg}"
+               onclick="openBlockPopup(event,'${escJs(sec.class_number)}','${escJs(sec.course_code)}','${escJs(sec.section_number || '')}')">
+            <div class="cal-block-code">${escHtml(sec.course_code)}</div>
+            ${sec.course_title ? `<div class="cal-block-info" style="opacity:.85;font-style:italic">${escHtml(sec.course_title)}</div>` : ''}
+            <div class="cal-block-info">${escHtml(fmtTime(mtg.start_time))}–${escHtml(fmtTime(mtg.end_time))}</div>
+            ${mtg.room ? `<div class="cal-block-info">${escHtml(mtg.room)}</div>` : ''}
+            ${conflict ? '<div class="cal-block-info"><i class="bi bi-exclamation-triangle-fill"></i> Conflict</div>' : ''}
+          </div>`;
+      }
+    }
+  }
+
+  if (planned.length === 0)
+    html += `<div class="cal-empty">Add sections from the left panel to build your schedule.</div>`;
+
+  html += '</div>';
+  wrap.innerHTML = `<div style="padding-top:26px;position:relative">${html}</div>`;
+
+  updateCreditCount();
+  updateSemesterView();
+  updateViewToggle();
+  updateRowButtons();
+}
+
+// Re-render calendar when card width changes (e.g. window resize)
+new ResizeObserver(() => renderCalendar()).observe(document.getElementById('calendarWrap'));
+
+function updateCreditCount() {
+  // For each unique course code in the schedule, prefer section units (authoritative);
+  // fall back to catalog credits when units are missing from the schedule DB.
+  // Deduplicating by course_code prevents LEC+LAB double-counting.
+  const countedCodes = new Set();
+  let total = 0;
+
+  for (const s of planned) {
+    if (countedCodes.has(s.course_code)) continue;
+    countedCodes.add(s.course_code);
+    total += parseFloat(s.units) || planCreditsMap.get(s.course_code) || 0;
+  }
+
+  // Also include plan courses that have no section scheduled yet.
+  planCreditsMap.forEach((cr, code) => {
+    if (!countedCodes.has(code)) total += cr;
+  });
+
+  const el = document.getElementById('creditCount');
+  el.textContent = total > 0 ? `${total} cr planned` : '';
+}
+
+// ── Row button state ──────────────────────────────────────────────────────────
+
+// Returns true if any slash-separated component of catalogCode matches a planned section.
+// Needed because catalog codes like "ITAL 101 / ITAL 101M" contain multiple PeopleSoft codes.
+function _codeInPlan(catalogCode) {
+  return planned.some(s =>
+    catalogCode.split('/').map(p => p.trim()).some(p => p && p === s.course_code)
+  );
+}
+
+function updateRowButtons() {
+  document.querySelectorAll('.course-row[data-code]').forEach(row => {
+    const code = row.dataset.code;
+    const btn  = row.querySelector('.section-toggle-btn');
+    if (!btn) return;
+    if (_codeInPlan(code)) {
+      btn.className = 'btn btn-sm btn-success py-0 px-1 flex-shrink-0 section-toggle-btn';
+      btn.querySelector('i').className = 'bi bi-check-lg';
+      btn.title = 'Manage sections';
+    } else {
+      btn.className = 'btn btn-sm btn-outline-primary py-0 px-1 flex-shrink-0 section-toggle-btn';
+      btn.querySelector('i').className = 'bi bi-plus-lg';
+      btn.title = 'View sections';
+    }
+  });
+}
+
+// Unified click handler: always open picker so multiple sections can be managed
+function handleToggle(btn, code) {
+  const safecode = code.replace(/ /g,'_').replace(/\//g,'_');
+  const searchPicker = document.getElementById('sp-' + safecode);
+  const row = btn.closest('.course-row');
+  const inSearch = row && row.closest('#searchResults');
+  if (inSearch && searchPicker) {
+    toggleSearchPicker(btn, code);
+  } else {
+    toggleInlinePicker(btn, code);
+  }
+}
+
+async function removeCourseFromPlan(courseCode) {
+  const toRemove = planned.filter(s => s.course_code === courseCode);
+  for (const sec of toRemove) {
+    await fetch('/api/schedule/remove', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','X-CSRF-Token': CSRF_TOKEN},
+      body: JSON.stringify({class_number: sec.class_number, term_code: termCode}),
+    });
+  }
+  // Remove from plan too
+  planCourseCodes.delete(courseCode);
+  await fetch('/api/plan/courses', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRF-Token': CSRF_TOKEN},
+    body: JSON.stringify({code: courseCode, action: 'remove'}),
+  });
+  // Close any open picker for this course
+  const picker = document.getElementById('ip-' + courseCode.replace(/ /g,'_').replace(/\//g,'_'));
+  if (picker) picker.classList.add('d-none');
+  await refreshPlanned();
+}
+
+// ── View switching ────────────────────────────────────────────────────────────
+
+function updateViewToggle() {
+  const searching    = document.getElementById('courseSearch').value.trim().length >= 2;
+  const hasSomething = planned.length > 0 || planCourseCodes.size > 0;
+  document.getElementById('viewToggle').classList.toggle('d-none', !hasSomething || searching);
+}
+
+function switchView(view) {
+  currentView = view;
+  document.getElementById('programsView').classList.toggle('d-none', view !== 'programs');
+  document.getElementById('semesterView').classList.toggle('d-none', view !== 'semester');
+  document.getElementById('btnPrograms').classList.toggle('active', view === 'programs');
+  document.getElementById('btnSemester').classList.toggle('active', view === 'semester');
+}
+
+function switchProgram(idx) {
+  document.querySelectorAll('.program-blocks').forEach(el => {
+    el.style.display = el.dataset.prog == idx ? '' : 'none';
+  });
+}
+
+function updateSemesterView() {
+  const list = document.getElementById('semesterList');
+  const scheduledCodes  = new Set(planned.map(s => s.course_code));
+  const unscheduled     = [...planCourseCodes].filter(c => !scheduledCodes.has(c));
+
+  if (planned.length === 0 && unscheduled.length === 0) {
+    list.innerHTML = '<p class="text-muted">No courses added yet.</p>';
+    if (currentView === 'semester') switchView('programs');
+    return;
+  }
+
+  let html = '';
+
+  // ── Sections already on the calendar ──────────────────────────────────────
+  for (const sec of planned) {
+    const mtg   = sec.meetings[0] || {};
+    const times = mtg.start_time ? `${fmtTime(mtg.start_time)}–${fmtTime(mtg.end_time)}` : 'TBA';
+    html += `
+      <div class="d-flex align-items-center gap-2 py-1" style="border-bottom:1px solid var(--bs-border-color-translucent)">
+        <div class="flex-grow-1" style="min-width:0">
+          <span class="fw-semibold text-primary">${escHtml(sec.course_code)}</span>
+          <span class="text-muted ms-1">${escHtml(sec.section_number)}</span>
+          <div class="text-muted" style="font-size:.7rem">${escHtml(mtg.days || 'TBA')} ${escHtml(times)}${mtg.room ? ' · '+escHtml(mtg.room) : ''}</div>
+        </div>
+        <button class="btn btn-sm btn-outline-danger py-0 px-1 flex-shrink-0" title="Remove section"
+                onclick="removeSection('${escJs(sec.class_number)}')">
+          <i class="bi bi-x"></i>
+        </button>
+      </div>`;
+  }
+
+  // ── Plan courses not yet scheduled ────────────────────────────────────────
+  if (unscheduled.length > 0) {
+    if (planned.length > 0)
+      html += `<div class="px-2 pt-2 pb-1 text-muted" style="font-size:.68rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase">Planned — no section picked</div>`;
+    for (const code of unscheduled) {
+      html += `
+        <div class="d-flex align-items-center gap-2 py-1" style="border-bottom:1px solid var(--bs-border-color-translucent)">
+          <div class="flex-grow-1" style="min-width:0">
+            <span class="fw-semibold text-secondary">${escHtml(code)}</span>
+            <div class="text-muted" style="font-size:.7rem">No section picked yet</div>
+          </div>
+          <button class="btn btn-sm btn-outline-primary py-0 px-1 flex-shrink-0" title="Search for sections"
+                  onclick="findSections('${escJs(code)}')">
+            <i class="bi bi-search"></i>
+          </button>
+          <button class="btn btn-sm btn-outline-danger py-0 px-1 flex-shrink-0" title="Remove from plan"
+                  onclick="removeFromPlan('${escJs(code)}')">
+            <i class="bi bi-x"></i>
+          </button>
+        </div>`;
+    }
+  }
+
+  list.innerHTML = html;
+}
+
+function findSections(code) {
+  // Switch to search mode and search for this course
+  const input = document.getElementById('courseSearch');
+  input.value = code;
+  input.dispatchEvent(new Event('input'));
+  switchView('programs');
+}
+
+async function removeFromPlan(code) {
+  planCourseCodes.delete(code);
+  planCreditsMap.delete(code);
+  await fetch('/api/plan/courses', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN},
+    body: JSON.stringify({code, action: 'remove'}),
+  });
+  updateSemesterView();
+  updateViewToggle();
+  updateCreditCount();
+}
+
+// ── Inline section picker ─────────────────────────────────────────────────────
+
+async function toggleInlinePicker(btn, code) {
+  const pid    = 'ip-' + code.replace(/ /g,'_').replace(/\//g,'_');
+  const picker = document.getElementById(pid);
+  if (!picker) return;
+
+  if (!picker.classList.contains('d-none')) {
+    picker.classList.add('d-none');
+    btn.querySelector('i').className = _codeInPlan(code) ? 'bi bi-check-lg' : 'bi bi-plus-lg';
+    return;
+  }
+
+  // Close any other open picker
+  document.querySelectorAll('.inline-picker:not(.d-none)').forEach(p => {
+    p.classList.add('d-none');
+    const prevRow = p.previousElementSibling;
+    if (prevRow) {
+      const b = prevRow.querySelector('button i');
+      if (b) {
+        const rowCode = prevRow.dataset.code;
+        b.className = (rowCode && _codeInPlan(rowCode))
+          ? 'bi bi-check-lg' : 'bi bi-plus-lg';
+      }
+    }
+  });
+
+  picker.classList.remove('d-none');
+  btn.querySelector('i').className = 'bi bi-dash-lg';
+  picker.innerHTML = '<div class="p-2 text-muted fst-italic">Loading…</div>';
+
+  const sections = await _fetchForHover(code);
+
+  // Auto-add only when the course isn't in the plan at all yet, AND all available
+  // sections share identical meeting times (e.g. DR 206 01-LEC vs 02-LEC, same slot
+  // different room). Once at least one section is already added, always show picker.
+  const courseInPlan = _codeInPlan(code);
+  if (!courseInPlan && sections.length > 0) {
+    const mtg0 = sections[0]?.meetings[0] || {};
+    const allSameMtg = sections.every(s => {
+      const m = s.meetings[0] || {};
+      return m.days === mtg0.days && m.start_time === mtg0.start_time && m.end_time === mtg0.end_time;
+    });
+    if (allSameMtg && mtg0.days && mtg0.start_time) {
+      picker.classList.add('d-none');
+      btn.querySelector('i').className = 'bi bi-plus-lg';
+      await addSection(sections[0].class_number, code);
+      return;
+    }
+  }
+
+  renderPickerSections(picker, code, sections);
+}
+
+function renderPickerSections(picker, code, sections) {
+  if (!sections.length) {
+    picker.innerHTML = '<div class="p-2 text-muted">No sections for this term.</div>';
+    return;
+  }
+  const added = new Set(planned.map(s => s.class_number));
+  let html = '<div class="d-flex flex-column gap-1 p-2">';
+  for (const s of sections) {
+    const mtg     = s.meetings[0] || {};
+    const days    = mtg.days || 'TBA';
+    const times   = mtg.start_time ? `${fmtTime(mtg.start_time)}–${fmtTime(mtg.end_time)}` : 'TBA';
+    const isAdded = added.has(s.class_number);
+    // Register meetings in ghostMap so hover can preview placement
+    const gid = `g${ghostIdx++}`;
+    ghostMap.set(gid, {meetings: s.meetings, code});
+    html += `
+      <div class="d-flex align-items-start gap-2 p-1 rounded ${isAdded ? 'bg-success bg-opacity-10' : 'hover-bg'}"
+           data-ghost-id="${gid}"
+           onmouseenter="showGhost('${gid}')"
+           onmouseleave="clearGhost()">
+        <div class="flex-grow-1" style="font-size:.71rem;min-width:0">
+          <span class="fw-semibold">${escHtml(s.section_number)}</span>
+          <span class="text-muted ms-1">${escHtml(s.component)}</span>
+          &nbsp;·&nbsp;${escHtml(days)} ${escHtml(times)}
+          ${mtg.room ? `&nbsp;·&nbsp;<span class="text-muted">${escHtml(mtg.room)}</span>` : ''}
+          ${s.instructors.length ? `<div class="text-muted">${s.instructors.map(escHtml).join(', ')}</div>` : ''}
+        </div>
+        ${isAdded
+          ? `<button class="btn btn-sm btn-outline-danger py-0 px-1 flex-shrink-0" onclick="removeSection('${escJs(s.class_number)}')"><i class="bi bi-x"></i></button>`
+          : `<button class="btn btn-sm btn-outline-success py-0 px-1 flex-shrink-0" onclick="addSection('${escJs(s.class_number)}','${escJs(code)}')"><i class="bi bi-plus-lg"></i></button>`
+        }
+      </div>`;
+  }
+  html += '</div>';
+  picker.innerHTML = html;
+}
+
+// ── Ghost hover preview ───────────────────────────────────────────────────────
+
+function _renderGhostMtg(mtg, code, grid) {
+  const color  = colorMap[code] || '#546e7a';
+  const s = parseTime(mtg.start_time), e = parseTime(mtg.end_time);
+  if (s === null || e === null) return;
+  const top    = (s - CAL_START) * PX_PER_MIN;
+  const height = Math.max((e - s) * PX_PER_MIN, 18);
+  for (const d of parseDays(mtg.days)) {
+    const di = currentShowDays.indexOf(d);
+    if (di < 0) continue;
+    const ghost = document.createElement('div');
+    ghost.className = 'cal-ghost';
+    ghost.style.cssText =
+      `top:${top}px;left:${TIME_W + di * currentColW + 2}px;height:${height}px;width:${currentColW-4}px;background:${color}`;
+    ghost.innerHTML =
+      `<div style="font-weight:700;font-size:.67rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(code)}</div>`;
+    grid.appendChild(ghost);
+  }
+}
+
+function showGhost(gid) {
+  clearGhost();
+  const entry = ghostMap.get(gid);
+  if (!entry) return;
+  const grid = document.querySelector('.cal-grid');
+  if (!grid) return;
+  for (const mtg of entry.meetings) _renderGhostMtg(mtg, entry.code, grid);
+}
+
+function clearGhost() {
+  document.querySelectorAll('.cal-ghost').forEach(el => el.remove());
+}
+
+// ── Course-row hover preview ──────────────────────────────────────────────────
+
+const _sectionCache = new Map();   // code → sections[]
+let   _rowHoverTimer = null;
+
+async function _fetchForHover(code) {
+  if (!_sectionCache.has(code)) {
+    const resp = await fetch(`/api/schedule/sections?code=${encodeURIComponent(code)}&term=${termCode}`);
+    _sectionCache.set(code, await resp.json());
+  }
+  return _sectionCache.get(code);
+}
+
+function onCourseRowEnter(code) {
+  if (_codeInPlan(code)) return;
+  _rowHoverTimer = setTimeout(async () => {
+    const sections = await _fetchForHover(code);
+    if (!sections.length) return;
+    const grid = document.querySelector('.cal-grid');
+    if (!grid) return;
+    clearGhost();
+    // Deduplicate by meeting pattern so overlapping DIS sections don't stack
+    const seen = new Set();
+    for (const sec of sections) {
+      for (const mtg of sec.meetings) {
+        const key = `${mtg.days}|${mtg.start_time}|${mtg.end_time}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        _renderGhostMtg(mtg, code, grid);
+      }
+    }
+  }, 150);
+}
+
+function onCourseRowLeave() {
+  clearTimeout(_rowHoverTimer);
+  clearGhost();
+}
+
+// ── Block popup ───────────────────────────────────────────────────────────────
+
+function openBlockPopup(event, classNumber, courseCode, sectionNumber) {
+  event.stopPropagation();
+  closeBlockPopup();
+
+  const popup = document.createElement('div');
+  popup.id = 'block-popup';
+  popup.innerHTML = `
+    <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
+      <div>
+        <span class="fw-bold">${escHtml(courseCode)}</span>
+        ${sectionNumber ? `<span class="text-muted ms-1 small">${escHtml(sectionNumber)}</span>` : ''}
+      </div>
+      <button class="btn-close btn-close-sm ms-1" style="font-size:.6rem" onclick="closeBlockPopup()"></button>
+    </div>
+    <button class="btn btn-danger btn-sm w-100 py-0" onclick="closeBlockPopup();removeSection('${escJs(classNumber)}')">
+      <i class="bi bi-x-lg me-1"></i>Remove section
+    </button>`;
+
+  // Position near the click, keeping it inside the viewport
+  const calWrap = document.getElementById('calendarWrap');
+  const wrapRect = calWrap.getBoundingClientRect();
+  let top  = event.clientY - wrapRect.top + calWrap.scrollTop + 8;
+  let left = event.clientX - wrapRect.left + 8;
+
+  // Clamp so it doesn't overflow the right edge (popup is ~160px wide)
+  if (left + 170 > calWrap.clientWidth) left = Math.max(0, calWrap.clientWidth - 174);
+
+  popup.style.cssText =
+    `position:absolute;top:${top}px;left:${left}px;z-index:200;` +
+    `background:var(--bs-body-bg);border:1px solid var(--bs-border-color);` +
+    `border-radius:6px;padding:10px 12px;box-shadow:0 4px 12px rgba(0,0,0,.2);` +
+    `min-width:160px;font-size:.8rem`;
+
+  calWrap.style.position = 'relative';
+  calWrap.appendChild(popup);
+}
+
+function closeBlockPopup() {
+  document.getElementById('block-popup')?.remove();
+}
+
+// Close popup when clicking anywhere outside it
+document.addEventListener('click', e => {
+  const popup = document.getElementById('block-popup');
+  if (popup && !popup.contains(e.target)) closeBlockPopup();
+});
+
+// ── Add / remove ──────────────────────────────────────────────────────────────
+
+async function addSection(classNumber, courseCode) {
+  await fetch('/api/schedule/add', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRF-Token': CSRF_TOKEN},
+    body: JSON.stringify({class_number: classNumber, term_code: termCode}),
+  });
+  // Sync to plan (idempotent — server uses INSERT OR IGNORE)
+  if (!planCourseCodes.has(courseCode)) {
+    planCourseCodes.add(courseCode);
+    await fetch('/api/plan/courses', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','X-CSRF-Token': CSRF_TOKEN},
+      body: JSON.stringify({code: courseCode, action: 'add'}),
+    });
+  }
+  await refreshPlanned();
+  // Re-render any open picker for this course with fresh data
+  const pid = 'ip-' + courseCode.replace(/ /g,'_').replace(/\//g,'_');
+  const picker = document.getElementById(pid);
+  if (picker && !picker.classList.contains('d-none')) {
+    renderPickerSections(picker, courseCode, await _fetchForHover(courseCode));
+  }
+  const q = document.getElementById('courseSearch').value.trim();
+  if (q.length >= 2) runSearch(q);
+}
+
+async function removeSection(classNumber) {
+  // Capture course code before removing so we can check plan sync after
+  const sec = planned.find(s => s.class_number === classNumber);
+  const courseCode = sec?.course_code;
+
+  await fetch('/api/schedule/remove', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRF-Token': CSRF_TOKEN},
+    body: JSON.stringify({class_number: classNumber, term_code: termCode}),
+  });
+  await refreshPlanned();
+
+  // If no sections remain for this course, also remove it from the plan
+  if (courseCode && !planned.some(s => s.course_code === courseCode)) {
+    planCourseCodes.delete(courseCode);
+    await fetch('/api/plan/courses', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','X-CSRF-Token': CSRF_TOKEN},
+      body: JSON.stringify({code: courseCode, action: 'remove'}),
+    });
+  }
+
+  // Re-render any currently-open pickers with fresh data
+  document.querySelectorAll('.inline-picker:not(.d-none)').forEach(async picker => {
+    const row  = picker.previousElementSibling;
+    const code = row?.dataset?.code;
+    if (!code) return;
+    renderPickerSections(picker, code, await _fetchForHover(code));
+  });
+  const q = document.getElementById('courseSearch').value.trim();
+  if (q.length >= 2) runSearch(q);
+}
+
+async function refreshPlanned() {
+  const [secResp, planResp] = await Promise.all([
+    fetch(`/api/schedule/planned?term=${termCode}`),
+    fetch('/api/plan/courses'),
+  ]);
+  planned        = await secResp.json();
+  const planData = await planResp.json();
+  planCreditsMap = new Map(planData.map(c => [c.code, parseFloat(c.credits) || 0]));
+  planCourseCodes = new Set(planCreditsMap.keys());
+  _sectionCache.clear();
+  renderCalendar();
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+
+let searchTimer = null;
+
+document.getElementById('courseSearch').addEventListener('input', function() {
+  clearTimeout(searchTimer);
+  const q = this.value.trim();
+  const searchBox   = document.getElementById('searchResults');
+  const programsDiv = document.getElementById('programsView');
+  const semesterDiv = document.getElementById('semesterView');
+
+  if (q.length < 2) {
+    searchBox.classList.add('d-none');
+    programsDiv.classList.toggle('d-none', currentView !== 'programs');
+    semesterDiv.classList.toggle('d-none',  currentView !== 'semester');
+    updateViewToggle();
+    return;
+  }
+  programsDiv.classList.add('d-none');
+  semesterDiv.classList.add('d-none');
+  document.getElementById('viewToggle').classList.add('d-none');
+  searchTimer = setTimeout(() => runSearch(q), 250);
+});
+
+async function runSearch(q) {
+  const box = document.getElementById('searchResults');
+  box.classList.remove('d-none');
+  box.innerHTML = '<span class="text-muted fst-italic">Searching…</span>';
+
+  const resp    = await fetch(`/api/schedule/courses?q=${encodeURIComponent(q)}&term=${termCode}`);
+  const courses = await resp.json();
+
+  if (!courses.length) { box.innerHTML = '<span class="text-muted">No courses found.</span>'; return; }
+
+  let html = '';
+  for (const c of courses) {
+    const safeid = c.code.replace(/ /g,'_').replace(/\//g,'_');
+    html += `
+      <div class="course-row d-flex align-items-center gap-2 py-1"
+           style="border-bottom:1px solid var(--bs-border-color-translucent)"
+           data-code="${escHtml(c.code)}" data-credits="0"
+           onmouseenter="onCourseRowEnter('${escJs(c.code)}')"
+           onmouseleave="onCourseRowLeave()">
+        <div class="flex-grow-1" style="min-width:0">
+          <div class="fw-semibold text-primary" style="font-size:.8rem">${escHtml(c.code)}</div>
+          ${c.title ? `<div class="text-muted" style="font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(c.title.substring(0,42))}</div>` : ''}
+        </div>
+        <button class="btn btn-sm btn-outline-primary py-0 px-1 flex-shrink-0 section-toggle-btn"
+                onclick="handleToggle(this,'${escJs(c.code)}')" title="View sections">
+          <i class="bi bi-plus-lg"></i>
+        </button>
+      </div>
+      <div id="sp-${safeid}" class="inline-picker d-none"></div>`;
+  }
+  box.innerHTML = html;
+}
+
+async function toggleSearchPicker(btn, code) {
+  const picker = document.getElementById('sp-' + code.replace(/ /g,'_').replace(/\//g,'_'));
+  if (!picker) return;
+  if (!picker.classList.contains('d-none')) {
+    picker.classList.add('d-none');
+    btn.querySelector('i').className = _codeInPlan(code) ? 'bi bi-check-lg' : 'bi bi-plus-lg';
+    return;
+  }
+  document.querySelectorAll('#searchResults .inline-picker:not(.d-none)').forEach(p => {
+    p.classList.add('d-none');
+    const prevRow = p.previousElementSibling;
+    if (prevRow) {
+      const b = prevRow.querySelector('button i');
+      if (b) {
+        const rowCode = prevRow.dataset.code;
+        b.className = (rowCode && _codeInPlan(rowCode))
+          ? 'bi bi-check-lg' : 'bi bi-plus-lg';
+      }
+    }
+  });
+  picker.classList.remove('d-none');
+  btn.querySelector('i').className = 'bi bi-dash-lg';
+  picker.innerHTML = '<div class="p-2 text-muted fst-italic">Loading…</div>';
+
+  const sections = await _fetchForHover(code);
+
+  const courseInPlan = _codeInPlan(code);
+  if (!courseInPlan && sections.length > 0) {
+    const mtg0 = sections[0]?.meetings[0] || {};
+    const allSameMtg = sections.every(s => {
+      const m = s.meetings[0] || {};
+      return m.days === mtg0.days && m.start_time === mtg0.start_time && m.end_time === mtg0.end_time;
+    });
+    if (allSameMtg && mtg0.days && mtg0.start_time) {
+      picker.classList.add('d-none');
+      btn.querySelector('i').className = 'bi bi-plus-lg';
+      await addSection(sections[0].class_number, code);
+      return;
+    }
+  }
+
+  renderPickerSections(picker, code, sections);
+}
+
+// ── Term selector ─────────────────────────────────────────────────────────────
+
+document.getElementById('termSelect').addEventListener('change', function() {
+  window.location.href = '/schedule?term=' + this.value;
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+renderCalendar();
+</script>
+
+<style>
+.cal-grid { user-select: none; }
+.cal-day-header {
+  position: absolute; top: -22px; text-align: center;
+  font-size: .7rem; font-weight: 600; color: var(--bs-secondary-color);
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.cal-hour-line { position: absolute; height: 1px; background: var(--bs-border-color); opacity: .5; }
+.cal-time-label { position: absolute; text-align: right; font-size: .62rem; color: var(--bs-secondary-color); }
+.cal-block {
+  position: absolute; border-radius: 4px; padding: 2px 4px;
+  color: #fff; font-size: .67rem; overflow: hidden; cursor: pointer;
+  transition: filter .15s; box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.cal-block:hover { filter: brightness(1.15); }
+.cal-ghost {
+  position: absolute; border-radius: 4px; padding: 2px 4px;
+  color: #fff; overflow: hidden; pointer-events: none;
+  opacity: 0.4; border: 2px dashed rgba(255,255,255,0.8);
+  transition: opacity .1s;
+}
+.cal-block-code { font-weight: 700; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-block-info { opacity: .9; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-empty {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  color: var(--bs-secondary-color); font-size: .85rem; text-align: center; pointer-events: none;
+}
+.inline-picker { background: var(--bs-tertiary-bg); border-radius: 4px; margin: 2px 0 4px; }
+.hover-bg:hover { background: var(--bs-secondary-bg); }
+#programsView .accordion-button { font-size: .8rem; }
+#programsView .accordion-button:not(.collapsed) { background: var(--bs-primary-bg-subtle); color: var(--bs-primary-text-emphasis); }
+</style>
+{% endblock %}

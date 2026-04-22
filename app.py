@@ -9,12 +9,40 @@ from src.logic import LogicEngine
 from src import user_db
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+
+def _load_secret_key() -> str:
+    env_key = os.environ.get("SECRET_KEY")
+    if env_key:
+        return env_key
+    key_file = Path("data/secret_key")
+    if key_file.exists():
+        return key_file.read_text().strip()
+    key = secrets.token_hex(32)
+    Path("data").mkdir(exist_ok=True)
+    key_file.write_text(key)
+    return key
+
+app.secret_key = _load_secret_key()
 _signer = URLSafeSerializer(app.secret_key, salt="user-id")
 
-DB_PATH = Path("data/cua_catalog.db")
+DB_PATH          = Path("data/cua_catalog.db")
+SCHEDULE_DB_PATH = Path("data/cua_schedule.db")
 engine = LogicEngine(DB_PATH)
 user_db.init()
+
+
+def _build_slash_node() -> dict:
+    """Map every slash-separated code component → CourseNode. Computed once at startup."""
+    result: dict = {}
+    for cat_code, node in engine.courses.items():
+        for part in cat_code.split('/'):
+            part = part.strip()
+            if part not in result or not result[part].credits:
+                result[part] = node
+    return result
+
+
+_SLASH_NODE: dict = _build_slash_node()
 
 
 @app.context_processor
@@ -77,9 +105,130 @@ def set_user_cookie(response):
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    if 'db' not in g:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        g.db = conn
+    return g.db
+
+
+def _schedule_db():
+    if 'schedule_db' not in g:
+        conn = sqlite3.connect(SCHEDULE_DB_PATH)
+        conn.row_factory = sqlite3.Row
+        g.schedule_db = conn
+    return g.schedule_db
+
+
+@app.teardown_appcontext
+def close_dbs(e=None):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
+    sdb = g.pop('schedule_db', None)
+    if sdb is not None:
+        sdb.close()
+
+
+def _get_schedule_terms() -> list[dict]:
+    """Return available terms from the schedule DB, most recent first."""
+    if not SCHEDULE_DB_PATH.exists():
+        return []
+    conn = _schedule_db()
+    rows = conn.execute(
+        "SELECT code, name FROM terms ORDER BY code DESC"
+    ).fetchall()
+    return [{"code": r["code"], "name": r["name"]} for r in rows]
+
+
+def _get_sections_for_course(course_code: str, term_code: str) -> list[dict]:
+    """Return all sections for a course in a given term, with meetings and instructors.
+
+    course_code may be a slash-separated catalog code like "CSC 113 / CSC 113H";
+    we try each component individually.
+    """
+    if not SCHEDULE_DB_PATH.exists():
+        return []
+    # Expand slash-separated catalog codes into individual codes
+    candidates = [p.strip() for p in course_code.split("/") if p.strip()]
+    conn = _schedule_db()
+    placeholders = ",".join("?" * len(candidates))
+    sections = conn.execute(f"""
+        SELECT id, course_code, section_number, class_number, component, status, units
+        FROM course_sections
+        WHERE course_code IN ({placeholders}) AND term_code = ?
+        ORDER BY course_code, section_number
+    """, (*candidates, term_code)).fetchall()
+
+    result = []
+    for s in sections:
+        meetings = conn.execute("""
+            SELECT days, start_time, end_time, room, start_date, end_date
+            FROM section_meetings WHERE section_id = ?
+        """, (s["id"],)).fetchall()
+        instructors = conn.execute("""
+            SELECT instructor_name FROM section_instructors WHERE section_id = ?
+        """, (s["id"],)).fetchall()
+        result.append({
+            "class_number":   s["class_number"],
+            "section_number": s["section_number"],
+            "component":      s["component"],
+            "status":         s["status"],
+            "meetings": [dict(m) for m in meetings],
+            "instructors": [r["instructor_name"] for r in instructors],
+        })
+    return result
+
+
+def _get_planned_section_objects(uid: str, term_code: str) -> list[dict]:
+    """Return full section + meeting data for a user's planned sections in a term."""
+    if not SCHEDULE_DB_PATH.exists():
+        return []
+    class_numbers = user_db.get_planned_sections(uid, term_code)
+    if not class_numbers:
+        return []
+
+    conn = _schedule_db()
+    placeholders = ",".join("?" * len(class_numbers))
+    sections = conn.execute(f"""
+        SELECT id, course_code, section_number, class_number, component, status, units
+        FROM course_sections
+        WHERE class_number IN ({placeholders}) AND term_code = ?
+    """, (*class_numbers, term_code)).fetchall()
+
+    # Look up course titles from the catalog DB
+    course_codes = list({s["course_code"] for s in sections})
+    catalog_titles: dict[str, str] = {}
+    if DB_PATH.exists() and course_codes:
+        cat = _db()
+        ph = ",".join("?" * len(course_codes))
+        for row in cat.execute(
+            f"SELECT code, title FROM courses WHERE code IN ({ph}) AND is_placeholder=0 LIMIT {len(course_codes)*2}",
+            course_codes,
+        ):
+            catalog_titles.setdefault(row["code"], row["title"])
+
+    result = []
+    for s in sections:
+        meetings = conn.execute("""
+            SELECT days, start_time, end_time, room
+            FROM section_meetings WHERE section_id = ?
+        """, (s["id"],)).fetchall()
+        instructors = conn.execute("""
+            SELECT instructor_name FROM section_instructors WHERE section_id = ?
+        """, (s["id"],)).fetchall()
+        result.append({
+            "course_code":    s["course_code"],
+            "course_title":   catalog_titles.get(s["course_code"], ""),
+            "class_number":   s["class_number"],
+            "section_number": s["section_number"],
+            "component":      s["component"],
+            "status":         s["status"],
+            "units":          s["units"] or "",
+            "meetings": [dict(m) for m in meetings],
+            "instructors": [r["instructor_name"] for r in instructors],
+        })
+    return result
 
 
 def _completed() -> set:
@@ -144,7 +293,6 @@ def index():
     rows = conn.execute(
         "SELECT name, slug, category, status FROM programs ORDER BY category, name"
     ).fetchall()
-    conn.close()
 
     order = ["Bachelor Degrees", "Associate Degrees", "Minors", "Certificates"]
     categories = {cat: [] for cat in order}
@@ -187,13 +335,58 @@ def my_plan():
         if c["code"] in prog_courses
     ] if program_slugs else []
 
-    plan = engine.next_two_years_multi(completed, program_slugs) if program_slugs else []
+    # Upcoming semester plan
+    terms             = _get_schedule_terms()
+    current_term      = terms[0]["code"] if terms else ""
+    current_term_name = terms[0]["name"] if terms else ""
+    planned_sections  = _get_planned_section_objects(g.user_id, current_term) if current_term else []
+
+    # Backfill plan from any already-scheduled sections (idempotent INSERT OR IGNORE)
+    for sec in planned_sections:
+        user_db.add_plan_course(g.user_id, sec["course_code"])
+
+    plan_course_codes = user_db.get_plan_courses(g.user_id)
+
+    # Build an info dict (title, credits) for each plan course.
+    # Use section units (from schedule DB) as the authoritative credit count —
+    # catalog credits can differ from actual enrolled units (e.g. variable-credit courses).
+    eligible_lookup  = {c["code"]: c for c in eligible}
+    section_units    = {s["course_code"]: s["units"] for s in planned_sections if s.get("units")}
+
+    # Build slash-reverse lookups so PeopleSoft codes like "TRS 202B" can resolve
+    # catalog entries stored as slash-separated codes like "TRS 202A / TRS 202B".
+    slash_node = _SLASH_NODE
+    slash_eligible = {}
+    for cat_code, info in eligible_lookup.items():
+        for part in cat_code.split('/'):
+            part = part.strip()
+            if part not in slash_eligible or not slash_eligible[part].get("credits"):
+                slash_eligible[part] = info
+
+    plan_courses = []
+    for code in plan_course_codes:
+        node = engine.courses.get(code) or slash_node.get(code)
+        info = eligible_lookup.get(code) or slash_eligible.get(code)
+        credits = (
+            section_units.get(code)
+            or (info or {}).get("credits")
+            or (node.credits if node else "")
+        )
+        plan_courses.append({
+            "code":    code,
+            "title":   (info or {}).get("title") or (node.title if node else ""),
+            "credits": credits,
+        })
 
     return render_template("my_plan.html",
         programs=programs_data,
         completed=completed,
         eligible=eligible,
-        plan=plan,
+        plan_courses=plan_courses,
+        plan_course_codes=plan_course_codes,
+        planned_sections=planned_sections,
+        current_term=current_term,
+        current_term_name=current_term_name,
     )
 
 
@@ -224,9 +417,11 @@ def advisor(slug):
     prog = engine.programs[slug]
 
     conn = _db()
-    pid = conn.execute(
-        "SELECT id FROM programs WHERE slug=?", (slug,)
-    ).fetchone()["id"]
+    prog_row = conn.execute(
+        "SELECT id, url FROM programs WHERE slug=?", (slug,)
+    ).fetchone()
+    pid = prog_row["id"]
+    catalog_url = prog_row["url"]
 
     blocks_raw = conn.execute(
         "SELECT id, title, instruction, notes FROM requirement_blocks "
@@ -249,7 +444,25 @@ def advisor(slug):
             "done":        done,
             "total":       len([c for c in courses_list if c["code"]]),
         })
-    conn.close()
+    # Collect all course codes that appear in this program's blocks
+    program_codes = set()
+    for b in blocks:
+        for c in b["courses"]:
+            if c["code"]:
+                for part in c["code"].split("/"):
+                    program_codes.add(part.strip())
+
+    # Outside courses: completed but not in any program block
+    outside_courses = []
+    for code in sorted(completed):
+        code_parts = {p.strip() for p in code.split("/") if p.strip()}
+        if not code_parts & program_codes:
+            node = engine.courses.get(code)
+            outside_courses.append({
+                "code":    code,
+                "title":   node.title if node else "",
+                "credits": node.credits if node else "",
+            })
 
     eligible = engine.eligible_courses(completed, slug)
     audit    = engine.degree_audit(completed, slug)
@@ -261,6 +474,9 @@ def advisor(slug):
         eligible=eligible,
         audit=audit,
         in_plan=in_plan,
+        catalog_url=catalog_url,
+        outside_courses=outside_courses,
+        plan_courses=user_db.get_plan_courses(g.user_id),
     )
 
 
@@ -297,7 +513,6 @@ def course_detail(code):
         WHERE c.code = ?
         ORDER BY p.name
     """, (code,)).fetchall()
-    conn.close()
 
     course_components = _expand_code(code)
     prereq_groups = []
@@ -397,6 +612,21 @@ def api_courses():
     return jsonify(sorted(results, key=lambda x: x["code"])[:25])
 
 
+@app.route("/api/advisor-state/<slug>")
+def api_advisor_state(slug):
+    if slug not in engine.programs:
+        return jsonify({"error": "not found"}), 404
+    completed = _completed()
+    eligible  = engine.eligible_courses(completed, slug)
+    audit     = engine.degree_audit(completed, slug)
+    return jsonify({
+        "eligible":           eligible,
+        "completion_pct":     audit["completion_pct"],
+        "graduation_eligible": audit["graduation_eligible"],
+        "blocks":             [{"done": b["satisfied_count"], "total": b["required_count"]} for b in audit["blocks"]],
+    })
+
+
 @app.route("/api/programs")
 def api_programs():
     q = request.args.get("q", "").strip().lower()[:50]
@@ -427,5 +657,241 @@ def api_prereq_chain(code):
     return jsonify({"nodes": nodes, "edges": edges})
 
 
+# ── Schedule planner ───────────────────────────────────────────────────────────
+
+@app.route("/schedule")
+def schedule():
+    terms     = _get_schedule_terms()
+    term_code = request.args.get("term") or (terms[0]["code"] if terms else "")
+    term_name = next((t["name"] for t in terms if t["code"] == term_code), "")
+
+    completed     = _completed()
+    program_slugs = user_db.get_programs(g.user_id)
+    planned       = _get_planned_section_objects(g.user_id, term_code)
+
+    # Precompute which course codes have sections in the selected term
+    offered_codes: set[str] = set()
+    if SCHEDULE_DB_PATH.exists() and term_code:
+        sconn = _schedule_db()
+        for row in sconn.execute(
+            "SELECT DISTINCT course_code FROM course_sections WHERE term_code=?",
+            (term_code,),
+        ):
+            offered_codes.add(row["course_code"])
+
+    # Build per-program block/course data (incomplete courses only) for the left panel
+    programs_data = []
+    for slug in program_slugs:
+        if slug not in engine.programs:
+            continue
+        prog = engine.programs[slug]
+        conn = _db()
+        prog_row = conn.execute("SELECT id FROM programs WHERE slug=?", (slug,)).fetchone()
+        if not prog_row:
+            continue
+        blocks_raw = conn.execute(
+            "SELECT id, title FROM requirement_blocks WHERE program_id=? ORDER BY id",
+            (prog_row["id"],),
+        ).fetchall()
+        blocks = []
+        for b in blocks_raw:
+            courses_raw = conn.execute(
+                "SELECT code, title, credits FROM courses "
+                "WHERE block_id=? AND is_placeholder=0 AND code!='' ORDER BY id",
+                (b["id"],),
+            ).fetchall()
+            incomplete = [dict(c) for c in courses_raw
+                          if not is_completed_filter(c["code"], completed)]
+            if incomplete:
+                blocks.append({"title": b["title"], "courses": incomplete})
+
+        # Batch-fetch prerequisites for all component codes in this program
+        component_codes = []
+        for b_data in blocks:
+            for c in b_data["courses"]:
+                component_codes.extend(p.strip() for p in c["code"].split("/") if p.strip())
+        prereqs_map: dict[str, str] = {}
+        if component_codes:
+            ph = ",".join("?" * len(component_codes))
+            for row in conn.execute(
+                f"SELECT code, prerequisites FROM course_details WHERE code IN ({ph})",
+                component_codes,
+            ):
+                if row["prerequisites"]:
+                    prereqs_map[row["code"]] = row["prerequisites"]
+
+        # Annotate each course with offered status and prerequisites
+        for b_data in blocks:
+            for c in b_data["courses"]:
+                parts = [p.strip() for p in c["code"].split("/") if p.strip()]
+                c["offered"] = any(p in offered_codes for p in parts)
+                prereq = ""
+                for p in parts:
+                    if p in prereqs_map:
+                        raw = prereqs_map[p].strip()
+                        for prefix in ("Prerequisite: ", "Prerequisites: ", "Prerequisite(s): "):
+                            if raw.lower().startswith(prefix.lower()):
+                                raw = raw[len(prefix):]
+                                break
+                        prereq = raw[:90]
+                        break
+                c["prereqs"] = prereq
+                c["when_offered"] = ""  # filled in below for non-offered courses
+
+        # For non-offered courses, query which terms they have appeared in historically
+        non_offered_parts: list[str] = []
+        for b_data in blocks:
+            for c in b_data["courses"]:
+                if not c["offered"]:
+                    non_offered_parts.extend(
+                        p.strip() for p in c["code"].split("/") if p.strip()
+                    )
+
+        history_map: dict[str, list[str]] = {}
+        if non_offered_parts and SCHEDULE_DB_PATH.exists():
+            ph = ",".join("?" * len(non_offered_parts))
+            sconn = _schedule_db()
+            for row in sconn.execute(f"""
+                SELECT cs.course_code, t.name
+                FROM course_sections cs
+                JOIN terms t ON t.code = cs.term_code
+                WHERE cs.course_code IN ({ph})
+                GROUP BY cs.course_code, t.name
+                ORDER BY cs.term_code
+            """, non_offered_parts):
+                history_map.setdefault(row["course_code"], []).append(row["name"])
+
+        for b_data in blocks:
+            for c in b_data["courses"]:
+                if c["offered"]:
+                    continue
+                parts = [p.strip() for p in c["code"].split("/") if p.strip()]
+                names = [n for p in parts for n in history_map.get(p, [])]
+                if not names:
+                    c["when_offered"] = "Not offered"
+                    continue
+                seasons: set[str] = set()
+                for name in names:
+                    if "Spring" in name:
+                        seasons.add("spring")
+                    elif "Fall" in name:
+                        seasons.add("fall")
+                    elif "Summer" in name:
+                        seasons.add("summer")
+                if len(seasons) == 1:
+                    c["when_offered"] = f"Offered in {list(seasons)[0]}"
+                elif seasons:
+                    c["when_offered"] = "Offered in " + "/".join(sorted(seasons))
+                else:
+                    c["when_offered"] = "Not offered"
+
+        if blocks:
+            programs_data.append({"slug": slug, "name": prog.name, "blocks": blocks})
+
+    # Backfill plan from already-scheduled sections (idempotent)
+    for sec in planned:
+        user_db.add_plan_course(g.user_id, sec["course_code"])
+
+    # Build plan courses with credits so the JS credit counter doesn't depend on the DOM
+    # (some plan courses like electives may not appear in any program block).
+    _slash_node = _SLASH_NODE
+    plan_courses = []
+    for _code in user_db.get_plan_courses(g.user_id):
+        _node = engine.courses.get(_code) or _slash_node.get(_code)
+        plan_courses.append({"code": _code, "credits": _node.credits if _node else ""})
+
+    return render_template("schedule.html",
+        terms=terms,
+        term_code=term_code,
+        term_name=term_name,
+        programs_data=programs_data,
+        planned=planned,
+        plan_courses=plan_courses,
+    )
+
+
+@app.route("/api/schedule/courses")
+def api_schedule_courses():
+    q    = request.args.get("q", "").strip().upper()[:20]
+    term = request.args.get("term", "").strip()
+    if len(q) < 2 or not term or not SCHEDULE_DB_PATH.exists():
+        return jsonify([])
+    conn = _schedule_db()
+    rows = conn.execute("""
+        SELECT DISTINCT course_code FROM course_sections
+        WHERE term_code = ? AND course_code LIKE ?
+        ORDER BY course_code LIMIT 25
+    """, (term, f"%{q}%")).fetchall()
+    conn.close()
+    results = []
+    for r in rows:
+        code = r["course_code"]
+        node = engine.courses.get(code)
+        results.append({"code": code, "title": node.title if node else ""})
+    return jsonify(results)
+
+
+@app.route("/api/plan/courses")
+def api_plan_courses_get():
+    codes = user_db.get_plan_courses(g.user_id)
+    slash_node = _SLASH_NODE
+    result = []
+    for code in codes:
+        node = engine.courses.get(code) or slash_node.get(code)
+        result.append({"code": code, "credits": node.credits if node else ""})
+    return jsonify(result)
+
+
+@app.route("/api/plan/courses", methods=["POST"])
+def api_plan_courses_post():
+    data   = request.get_json()
+    code   = (data.get("code") or "").strip().upper()
+    action = data.get("action", "add")
+    if code:
+        if action == "remove":
+            user_db.remove_plan_course(g.user_id, code)
+        else:
+            user_db.add_plan_course(g.user_id, code)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/schedule/sections")
+def api_schedule_sections():
+    course_code = request.args.get("code", "").strip().upper()
+    term_code   = request.args.get("term", "").strip()
+    if not course_code or not term_code:
+        return jsonify([])
+    return jsonify(_get_sections_for_course(course_code, term_code))
+
+
+@app.route("/api/schedule/add", methods=["POST"])
+def api_schedule_add():
+    data         = request.get_json()
+    class_number = (data.get("class_number") or "").strip()
+    term_code    = (data.get("term_code") or "").strip()
+    if class_number and term_code:
+        user_db.add_planned_section(g.user_id, class_number, term_code)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/schedule/remove", methods=["POST"])
+def api_schedule_remove():
+    data         = request.get_json()
+    class_number = (data.get("class_number") or "").strip()
+    term_code    = (data.get("term_code") or "").strip()
+    if class_number and term_code:
+        user_db.remove_planned_section(g.user_id, class_number, term_code)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/schedule/planned")
+def api_schedule_planned():
+    term_code = request.args.get("term", "").strip()
+    if not term_code:
+        return jsonify([])
+    return jsonify(_get_planned_section_objects(g.user_id, term_code))
+
+
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5001)
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug, host="0.0.0.0", port=5001)
