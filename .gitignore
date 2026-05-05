@@ -2,6 +2,14 @@
 __pycache__/
 *.pyc
 .DS_Store
-*.db
-data/
+.claude/
+advisorengine.tar.gz
 CSC210_ClassProject.pdf
+
+# data/ — include catalog and schedule DBs, exclude everything else
+data/users.db
+data/user_data.db
+data/secret_key
+data/*.bak
+data/*.bak-shm
+data/*.bak-wal
