@@ -196,18 +196,6 @@ def _get_planned_section_objects(uid: str, term_code: str) -> list[dict]:
         WHERE class_number IN ({placeholders}) AND term_code = ?
     """, (*class_numbers, term_code)).fetchall()
 
-    # Look up course titles from the catalog DB
-    course_codes = list({s["course_code"] for s in sections})
-    catalog_titles: dict[str, str] = {}
-    if DB_PATH.exists() and course_codes:
-        cat = _db()
-        ph = ",".join("?" * len(course_codes))
-        for row in cat.execute(
-            f"SELECT code, title FROM courses WHERE code IN ({ph}) AND is_placeholder=0 LIMIT {len(course_codes)*2}",
-            course_codes,
-        ):
-            catalog_titles.setdefault(row["code"], row["title"])
-
     result = []
     for s in sections:
         meetings = conn.execute("""
@@ -217,9 +205,10 @@ def _get_planned_section_objects(uid: str, term_code: str) -> list[dict]:
         instructors = conn.execute("""
             SELECT instructor_name FROM section_instructors WHERE section_id = ?
         """, (s["id"],)).fetchall()
+        node = engine.courses.get(s["course_code"]) or _SLASH_NODE.get(s["course_code"])
         result.append({
             "course_code":    s["course_code"],
-            "course_title":   catalog_titles.get(s["course_code"], ""),
+            "course_title":   node.title if node else "",
             "class_number":   s["class_number"],
             "section_number": s["section_number"],
             "component":      s["component"],
@@ -861,7 +850,7 @@ def api_schedule_courses():
     results = []
     for r in rows:
         code = r["course_code"]
-        node = engine.courses.get(code)
+        node = engine.courses.get(code) or _SLASH_NODE.get(code)
         results.append({"code": code, "title": node.title if node else ""})
     return jsonify(results)
 
